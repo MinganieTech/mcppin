@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "servers": [
+    {
+      "name": "billing",
+      "tools": [
+        {
+          "name": "stripe.refund",
+          "digest": "sha256:c2ee232c2b693ad11b2f2a6b21b9dc01653b660bd5dcc404e4eeef5ab628f5f0"
+        }
+      ]
+    },
+    {
+      "name": "repo",
+      "tools": [
+        {
+          "name": "github.merge_pull_request",
+          "digest": "sha256:2f0c6c238af5276a07ac69911bd9d90838416bed5a3cbe25276a8975716e77a4"
+        }
+      ]
+    }
+  ]
+}

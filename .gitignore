@@ -1,0 +1,5 @@
+/mcppin
+/mcppin.exe
+/dist/
+*.test
+*.out

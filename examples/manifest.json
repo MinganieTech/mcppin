@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "servers": [
+    {
+      "name": "billing",
+      "tools": [
+        {
+          "name": "stripe.refund",
+          "description": "Refund a charge that has already settled.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "charge_id": {"type": "string"},
+              "amount": {"type": "integer", "minimum": 1}
+            },
+            "required": ["charge_id", "amount"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "repo",
+      "tools": [
+        {
+          "name": "github.merge_pull_request",
+          "description": "Merge a pull request into its base branch.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {"number": {"type": "integer"}},
+            "required": ["number"]
+          }
+        }
+      ]
+    }
+  ]
+}

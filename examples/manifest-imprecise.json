@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "servers": [
+    {
+      "name": "ledger",
+      "tools": [
+        {
+          "name": "ledger.post_entry",
+          "description": "Post an entry in minor units.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "amount_minor": {"type": "integer", "maximum": 9007199254740993}
+            },
+            "required": ["amount_minor"]
+          }
+        }
+      ]
+    }
+  ]
+}
