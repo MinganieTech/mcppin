@@ -1,21 +1,36 @@
 package mcppin
 
 import (
+	"bytes"
+	"crypto/ed25519"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // Version is declared here and nowhere else.
 const Version = "0.1.0"
 
+// now and stdin are variables so a test can pin the moment a signature was
+// made and feed a key in without reaching for the process's own input.
+var (
+	now             = time.Now
+	stdin io.Reader = os.Stdin
+)
+
 // Exit codes are a public contract: CI pipelines branch on them, so changing
 // one is a breaking change. The distinction that matters is 1 against 3 - a
 // digest that cannot be reproduced must never be indistinguishable from a
 // digest that matched.
+//
+// When a run earns more than one of them, the strongest statement wins: 1
+// outranks 3, because an undecidable digest can only hide a departure, never
+// invent one, so a departure reported next to it is still proven. Both are in
+// the report either way, and both fail a gate.
 const (
 	ExitOK           = 0 // every requested policy holds
 	ExitPolicyFailed = 1 // a departure from the approved surface was proven
@@ -38,7 +53,11 @@ func usage(stderr io.Writer) {
 	fmt.Fprintf(stderr, "Pin the tool surface an agent was approved to see, and refuse the drift.\n\n")
 	fmt.Fprintf(stderr, "commands:\n")
 	fmt.Fprintf(stderr, "  lock     write the lockfile for the manifest as it stands\n")
-	fmt.Fprintf(stderr, "  verify   compare the manifest against a lockfile\n\n")
+	fmt.Fprintf(stderr, "  verify   compare the manifest against a lockfile\n")
+	fmt.Fprintf(stderr, "  sign     sign a lockfile, so it says who approved it\n")
+	fmt.Fprintf(stderr, "  key      generate an Ed25519 signing key\n\n")
+	fmt.Fprintf(stderr, "The manifest is a file. Capture one with mcppin-export, or export it from\n")
+	fmt.Fprintf(stderr, "your own gateway; this command speaks to nobody.\n\n")
 	fmt.Fprintf(stderr, "exit codes: 0 clean, 1 violation proven, 2 usage, 3 undecidable, 4 unreadable input\n")
 }
 
@@ -53,6 +72,10 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return runLock(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
+	case "sign":
+		return runSign(args[1:], stdout, stderr)
+	case "key":
+		return runKey(args[1:], stdout, stderr)
 	case "-version", "--version":
 		fmt.Fprintf(stdout, "mcppin %s\n", Version)
 		return ExitOK
@@ -98,6 +121,10 @@ func runLock(args []string, stdout, stderr io.Writer) int {
 	for _, finding := range inspection.Findings {
 		fmt.Fprintf(stderr, "warning: %s: %s\n", finding.Policy, finding.Detail)
 	}
+	if !manifest.CompleteStated {
+		fmt.Fprintf(stderr, "warning: this manifest is schema_version %d and cannot say whether the "+
+			"capture held every tool; version %d can\n", manifest.SchemaVersion, ManifestSchemaVersion)
+	}
 
 	lock, err := BuildLock(manifest)
 	if err != nil {
@@ -105,32 +132,184 @@ func runLock(args []string, stdout, stderr io.Writer) int {
 		return ExitUnreadable
 	}
 
-	writer := stdout
-	if *output != "" {
-		file, err := os.Create(*output)
-		if err != nil {
+	if *output == "" {
+		if err := WriteLock(stdout, lock); err != nil {
 			fmt.Fprintf(stderr, "mcppin: %v\n", err)
 			return ExitUnreadable
 		}
-		defer file.Close()
-		writer = file
+	} else {
+		if err := WriteLockFile(*output, lock); err != nil {
+			fmt.Fprintf(stderr, "mcppin: %v\n", err)
+			return ExitUnreadable
+		}
+		// The old signature is not deleted: removing somebody's signature is
+		// not this command's decision, and a stale one fails closed anyway.
+		if _, err := os.Stat(SignaturePath(*output)); err == nil {
+			fmt.Fprintf(stderr, "warning: %s no longer matches this lockfile; sign it again\n",
+				SignaturePath(*output))
+		}
 	}
-	if err := WriteLock(writer, lock); err != nil {
+
+	// A tool carrying a number the canonical form does not identify is pinned
+	// as undecidable rather than given a digest that would also cover the
+	// values around it. The file is still written - you cannot fix what you
+	// have not pinned - and the exit code says part of it proves nothing.
+	undecidable := false
+	for _, unstable := range inspection.Unstable {
+		fmt.Fprintf(stderr, "mcppin: %s %s carries %s, which float64 does not identify; it is pinned as undecidable\n",
+			unstable.Server, unstable.Tool, strings.Join(unstable.Literals, ", "))
+		undecidable = true
+	}
+	// Approving a partial capture pins a surface nobody saw whole: every tool
+	// the exporter missed will look added the first time it appears.
+	if !manifest.Complete {
+		fmt.Fprintf(stderr, "mcppin: this capture says it does not hold every tool; "+
+			"the lockfile approves only what was in it\n")
+		undecidable = true
+	}
+	if undecidable {
+		return ExitUndecidable
+	}
+	return ExitOK
+}
+
+func runSign(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mcppin sign", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	lockPath := fs.String("lock", "", "the lockfile to sign (required)")
+	keyPath := fs.String("key", "", "the PKCS#8 PEM private key, or - for standard input (required)")
+	output := fs.String("o", "", "write the signature here instead of <lock>.sig")
+	fs.Usage = func() {
+		fmt.Fprintf(stderr, "usage: mcppin sign -lock mcp.lock.json -key signing-key.pem\n\n")
+		fmt.Fprintf(stderr, "The signature is detached and covers the canonical form of the lockfile,\n")
+		fmt.Fprintf(stderr, "so re-indenting the file does not break it and changing what it approves\n")
+		fmt.Fprintf(stderr, "does.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return ExitOK
+		}
+		return ExitUsage
+	}
+	if *lockPath == "" || *keyPath == "" || fs.NArg() != 0 {
+		fs.Usage()
+		return ExitUsage
+	}
+
+	lockfile, err := os.ReadFile(*lockPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
+	}
+	// The lockfile is parsed before it is signed. Vouching for a file this
+	// build cannot read would put a signature on something nobody validated.
+	if _, err := ReadLock(bytes.NewReader(lockfile)); err != nil {
+		fmt.Fprintf(stderr, "mcppin: %s: %v\n", *lockPath, err)
+		return ExitUnreadable
+	}
+
+	pemBytes, err := readKeyMaterial(*keyPath, stdin)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
+	}
+	key, err := LoadPrivateKey(pemBytes)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %s: %v\n", *keyPath, err)
+		return ExitUnreadable
+	}
+
+	signature, err := SignLock(lockfile, key, now())
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
+	}
+	path := *output
+	if path == "" {
+		path = SignaturePath(*lockPath)
+	}
+	if err := WriteFileAtomically(path, func(w io.Writer) error { return WriteSignature(w, signature) }); err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
+	}
+	fmt.Fprintf(stdout, "signed %s as %s\nby %s\n", *lockPath, signature.LockDigest, signature.PublicKeyFingerprint)
+	return ExitOK
+}
+
+func runKey(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mcppin key", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	output := fs.String("o", "", "write the private key here, and the public key beside it (required)")
+	fs.Usage = func() {
+		fmt.Fprintf(stderr, "usage: mcppin key -o signing-key.pem\n\n")
+		fmt.Fprintf(stderr, "Writes an Ed25519 pair: the private key at -o, the public key at -o.pub.\n")
+		fmt.Fprintf(stderr, "Neither file is overwritten if it exists. The private key is not\n")
+		fmt.Fprintf(stderr, "encrypted: protect it the way you protect any other secret, and note\n")
+		fmt.Fprintf(stderr, "that anyone holding it can approve any surface.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return ExitOK
+		}
+		return ExitUsage
+	}
+	if *output == "" || fs.NArg() != 0 {
+		fs.Usage()
+		return ExitUsage
+	}
+
+	publicPath := *output + ".pub"
+	for _, path := range []string{*output, publicPath} {
+		if _, err := os.Stat(path); err == nil {
+			fmt.Fprintf(stderr, "mcppin: %s exists; refusing to replace a key\n", path)
+			return ExitUnreadable
+		}
+	}
+
+	public, private, err := GenerateSigningKey()
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
+	}
+	privatePEM, err := EncodePrivateKey(private)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
+	}
+	publicPEM, err := EncodePublicKey(public)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
+	}
+	// 0600 rather than the usual 0644, and on Windows it is the file system's
+	// inherited permissions that decide. Check them.
+	if err := os.WriteFile(*output, privatePEM, 0o600); err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
+	}
+	if err := os.WriteFile(publicPath, publicPEM, 0o644); err != nil {
 		fmt.Fprintf(stderr, "mcppin: %v\n", err)
 		return ExitUnreadable
 	}
 
-	// Pinning a tool whose digest is not reproducible produces a lockfile that
-	// will drift on its own. The file is still written, and the exit code says
-	// the pin cannot be trusted.
-	if len(inspection.Unstable) > 0 {
-		for _, unstable := range inspection.Unstable {
-			fmt.Fprintf(stderr, "mcppin: %s %s carries %s, which float64 does not hold exactly\n",
-				unstable.Server, unstable.Tool, strings.Join(unstable.Literals, ", "))
-		}
-		return ExitUndecidable
+	fingerprint, err := Fingerprint(public)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
 	}
+	fmt.Fprintf(stdout, "private key %s\npublic key  %s\nfingerprint %s\n", *output, publicPath, fingerprint)
 	return ExitOK
+}
+
+// readKeyMaterial reads a key from a file, or from standard input when the
+// path is "-", so a pipeline can sign without writing a private key to disk.
+func readKeyMaterial(path string, in io.Reader) ([]byte, error) {
+	if path == "-" {
+		return io.ReadAll(in)
+	}
+	return os.ReadFile(path)
 }
 
 func runVerify(args []string, stdout, stderr io.Writer) int {
@@ -138,8 +317,11 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	lockPath := fs.String("lock", "", "the approved lockfile (required)")
 	var failOn stringList
-	fs.Var(&failOn, "fail-on", "policy that must hold, repeatable")
-	asJSON := fs.Bool("json", false, "emit the machine-readable report instead of text")
+	fs.Var(&failOn, "fail-on", "policy that must hold, repeatable; also all or none")
+	var trusted stringList
+	fs.Var(&trusted, "pubkey", "an SPKI PEM key the lockfile must be signed by, repeatable")
+	signaturePath := fs.String("signature", "", "the detached signature (default <lock>.sig)")
+	format := fs.String("format", "text", "text, json or sarif")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: mcppin verify -lock mcp.lock.json [flags] <manifest.json>\n\nflags:\n")
 		fs.PrintDefaults()
@@ -147,6 +329,9 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		for _, p := range Policies() {
 			fmt.Fprintf(stderr, "  %s\n", p)
 		}
+		fmt.Fprintf(stderr, "  all   every policy above\n")
+		fmt.Fprintf(stderr, "  none  report only, exit 0 on any finding; must stand alone\n")
+		fmt.Fprintf(stderr, "\nwithout -fail-on the gate is %s.\n", strings.Join(DefaultPolicies(), ", "))
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -158,12 +343,16 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return ExitUsage
 	}
-	for _, policy := range failOn {
-		if !validPolicy(policy) {
-			fmt.Fprintf(stderr, "mcppin: unknown policy %q; accepted: %s\n",
-				policy, strings.Join(Policies(), ", "))
-			return ExitUsage
-		}
+	gate, err := resolveGate(failOn)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUsage
+	}
+	switch *format {
+	case "text", "json", "sarif":
+	default:
+		fmt.Fprintf(stderr, "mcppin: unknown format %q; accepted: text, json, sarif\n", *format)
+		return ExitUsage
 	}
 
 	manifest, err := LoadManifest(fs.Arg(0))
@@ -183,22 +372,119 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		return ExitUnreadable
 	}
 
-	if *asJSON {
-		if err := WriteJSON(stdout, result); err != nil {
+	// The signature is checked before anything is reported. A lockfile that
+	// fails it is not a smaller approval, it is not an approval: exit 4,
+	// because the record could not be read as one, and nothing about the
+	// served surface has been proven either way.
+	signedBy, code := checkTrust(*lockPath, *signaturePath, trusted, stderr)
+	if code != ExitOK {
+		return code
+	}
+	result.SignedBy = signedBy
+
+	switch *format {
+	case "text":
+		WriteText(stdout, result, gate)
+	case "json":
+		if err := WriteJSON(stdout, result, gate); err != nil {
 			fmt.Fprintf(stderr, "mcppin: %v\n", err)
 			return ExitUnreadable
 		}
-	} else {
-		WriteText(stdout, result, failOn)
+	case "sarif":
+		if err := WriteSARIF(stdout, result, gate, fs.Arg(0)); err != nil {
+			fmt.Fprintf(stderr, "mcppin: %v\n", err)
+			return ExitUnreadable
+		}
 	}
 
-	for _, policy := range failOn {
+	for _, policy := range gate {
 		if len(result.FindingsFor(policy)) > 0 {
 			return ExitPolicyFailed
 		}
 	}
-	if len(result.Unstable) > 0 {
+	if len(result.Unstable) > 0 || !result.CaptureComplete {
 		return ExitUndecidable
 	}
 	return ExitOK
+}
+
+// checkTrust settles who approved the lockfile, and returns the exit code to
+// stop on when the answer is nobody this run trusts.
+//
+// With no -pubkey the question is not asked, and a signature sitting next to
+// the lockfile is said to be unchecked rather than silently passed over: a
+// repository that signs and a pipeline that forgot to check is the failure
+// this is here to prevent.
+func checkTrust(lockPath, signaturePath string, trusted []string, stderr io.Writer) (string, int) {
+	path := signaturePath
+	if path == "" {
+		path = SignaturePath(lockPath)
+	}
+	if len(trusted) == 0 {
+		if _, err := os.Stat(path); err == nil {
+			fmt.Fprintf(stderr, "warning: %s exists and was not checked; pass -pubkey to check it\n", path)
+		}
+		return "", ExitOK
+	}
+
+	keys := make([]ed25519.PublicKey, 0, len(trusted))
+	for _, keyPath := range trusted {
+		pemBytes, err := os.ReadFile(keyPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "mcppin: %v\n", err)
+			return "", ExitUnreadable
+		}
+		key, err := LoadPublicKey(pemBytes)
+		if err != nil {
+			fmt.Fprintf(stderr, "mcppin: %s: %v\n", keyPath, err)
+			return "", ExitUnreadable
+		}
+		keys = append(keys, key)
+	}
+
+	lockfile, err := os.ReadFile(lockPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return "", ExitUnreadable
+	}
+	signature, err := LoadSignature(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return "", ExitUnreadable
+	}
+	fingerprint, err := CheckSignature(lockfile, signature, keys)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %s: %v\n", path, err)
+		return "", ExitUnreadable
+	}
+	return fingerprint, ExitOK
+}
+
+// resolveGate turns -fail-on into the list of policies the exit code answers
+// for. An empty command line means the default gate rather than no gate: a
+// verify that prints a violation and exits 0 is the failure mode this tool
+// exists to prevent, so reporting without gating has to be asked for by name.
+func resolveGate(requested []string) ([]string, error) {
+	if len(requested) == 0 {
+		return DefaultPolicies(), nil
+	}
+	for _, policy := range requested {
+		switch policy {
+		case "all":
+			if len(requested) > 1 {
+				return nil, errors.New("-fail-on all covers every policy and cannot be combined")
+			}
+			return Policies(), nil
+		case "none":
+			if len(requested) > 1 {
+				return nil, errors.New("-fail-on none gates nothing and cannot be combined")
+			}
+			return nil, nil
+		}
+		if !validPolicy(policy) {
+			return nil, fmt.Errorf("unknown policy %q; accepted: %s, all, none",
+				policy, strings.Join(Policies(), ", "))
+		}
+	}
+	return requested, nil
 }

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "billing": {
+      "command": "npx",
+      "args": ["-y", "@example/stripe-mcp"],
+      "env": {"STRIPE_MODE": "read-only"}
+    },
+    "repo": {
+      "command": "npx",
+      "args": ["-y", "@example/github-mcp"]
+    }
+  }
+}

@@ -1,5 +1,12 @@
 /mcppin
 /mcppin.exe
+/mcppin-export
+/mcppin-export.exe
 /dist/
 *.test
 *.out
+
+# A signing key generated in the working tree must never be committed. The
+# public key beside it is named .pem.pub and is meant to be, since it is the
+# trust anchor a verify run is pointed at.
+*.pem

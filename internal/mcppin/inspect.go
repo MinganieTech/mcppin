@@ -3,6 +3,7 @@ package mcppin
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -58,6 +59,38 @@ func scriptsOf(s string) []string {
 	return names
 }
 
+// portableNameRunes lists the characters of a tool name that fall outside
+// A-Za-z0-9, underscore, dot and hyphen. A name is what an agent is told to
+// call, what a log records and what a reviewer reads; anything else in it is a
+// chance for two names to look alike, or for one to read differently in the
+// place it is displayed than in the place it is matched.
+func portableNameRunes(name string) []string {
+	seen := make(map[rune]bool)
+	var found []string
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '_', r == '.', r == '-':
+			continue
+		}
+		if seen[r] {
+			continue
+		}
+		seen[r] = true
+		found = append(found, fmt.Sprintf("U+%04X", r))
+	}
+	sort.Strings(found)
+	return found
+}
+
+// pointerChild builds the JSON pointer, RFC 6901, of a member of the object at
+// parent. A finding has to say where it is: a description hidden three levels
+// down an input schema reaches the model exactly like the top-level one, and
+// "somewhere in this tool" is not something a reviewer can act on.
+func pointerChild(parent, token string) string {
+	return parent + "/" + strings.NewReplacer("~", "~0", "/", "~1").Replace(token)
+}
+
 // inspectTool reports what can be seen in a tool's own text, without judging
 // what it says. No classifier, no scoring, no reading of intent: a description
 // that asks an agent to do something outrageous in plain ASCII is a review
@@ -65,22 +98,12 @@ func scriptsOf(s string) []string {
 func inspectTool(server string, tool map[string]any) []Finding {
 	var findings []Finding
 	name := toolName(tool)
-	description := toolDescription(tool)
 
-	for where, text := range map[string]string{"name": name, "description": description} {
-		if text == "" {
-			continue
-		}
-		if hidden := hiddenRunes(text); len(hidden) > 0 {
-			findings = append(findings, Finding{
-				Policy: PolicyHiddenCharacters,
-				Server: server,
-				Tool:   name,
-				Detail: fmt.Sprintf("the %s carries characters that occupy no visible space: %s",
-					where, strings.Join(hidden, ", ")),
-			})
-		}
-	}
+	// Every string in the object is searched, not just the name and the
+	// description. A title, an annotation and the description of a nested
+	// schema property all reach the client and the model, so a character
+	// hiding in one of them hides just as well.
+	collectHidden(server, name, tool, "", &findings)
 
 	// Only the name is checked for mixed writing systems. A description mixing
 	// Latin and Han is ordinary prose; a tool name doing it is how one name is
@@ -94,6 +117,58 @@ func inspectTool(server string, tool map[string]any) []Finding {
 		})
 	}
 
+	if outside := portableNameRunes(name); len(outside) > 0 {
+		findings = append(findings, Finding{
+			Policy: PolicyInvalidToolName,
+			Server: server,
+			Tool:   name,
+			Detail: fmt.Sprintf("the name carries characters outside A-Za-z0-9._-: %s",
+				strings.Join(outside, ", ")),
+		})
+	}
+
 	sort.SliceStable(findings, func(i, j int) bool { return findings[i].Detail < findings[j].Detail })
 	return findings
+}
+
+func collectHidden(server, tool string, value any, pointer string, findings *[]Finding) {
+	switch v := value.(type) {
+	case string:
+		if hidden := hiddenRunes(v); len(hidden) > 0 {
+			*findings = append(*findings, Finding{
+				Policy: PolicyHiddenCharacters,
+				Server: server,
+				Tool:   tool,
+				Detail: fmt.Sprintf("the text at %s carries characters that occupy no visible space: %s",
+					pointerOf(pointer), strings.Join(hidden, ", ")),
+			})
+		}
+	case []any:
+		for i, item := range v {
+			collectHidden(server, tool, item, pointerChild(pointer, strconv.Itoa(i)), findings)
+		}
+	case map[string]any:
+		for _, key := range sortedKeys(v) {
+			child := pointerChild(pointer, key)
+			if hidden := hiddenRunes(key); len(hidden) > 0 {
+				*findings = append(*findings, Finding{
+					Policy: PolicyHiddenCharacters,
+					Server: server,
+					Tool:   tool,
+					Detail: fmt.Sprintf("the member name at %s carries characters that occupy no visible space: %s",
+						child, strings.Join(hidden, ", ")),
+				})
+			}
+			collectHidden(server, tool, v[key], child, findings)
+		}
+	}
+}
+
+// pointerOf names the whole tool object rather than printing the empty pointer
+// RFC 6901 uses for a document root.
+func pointerOf(pointer string) string {
+	if pointer == "" {
+		return "the tool object"
+	}
+	return pointer
 }

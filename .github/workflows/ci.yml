@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The output is ASCII and the lockfile is written through a rename because
+    # of Windows, so Windows is not an afterthought in this matrix.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: gofmt
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+      # There is one dependency and it is pinned. Both facts are worth checking
+      # on every push rather than at the next release.
+      - run: go mod verify
+      - run: go mod tidy -diff
+      - run: go vet ./...
+      # No -race: nothing here runs concurrently, and it would only make the
+      # matrix depend on a C toolchain being present.
+      - run: go test ./...
+      - run: go build ./...

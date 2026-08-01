@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # The version lives in cli.go and nowhere else. A tag that disagrees with
+      # it would publish a binary that misreports itself.
+      - name: the tag has to match the version in the source
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! grep -q "Version = \"${version}\"" internal/mcppin/cli.go; then
+            echo "tag ${GITHUB_REF_NAME} does not match the Version constant"
+            grep 'Version = ' internal/mcppin/cli.go
+            exit 1
+          fi
+
+      - run: go vet ./...
+      - run: go test ./...
+
+      - name: build every target
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            name="mcppin_${GITHUB_REF_NAME}_${os}_${arch}"
+            mkdir -p "dist/${name}"
+            for binary in mcppin mcppin-export; do
+              file="${binary}"
+              if [ "${os}" = "windows" ]; then
+                file="${binary}.exe"
+              fi
+              CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" \
+                go build -trimpath -ldflags "-s -w" -o "dist/${name}/${file}" "./cmd/${binary}"
+            done
+            cp README.md LICENSE docs/threat-model.md "dist/${name}/"
+            if [ "${os}" = "windows" ]; then
+              (cd dist && zip -qr "${name}.zip" "${name}")
+            else
+              tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+            fi
+            rm -rf "dist/${name}"
+          done
+
+      # A download nobody can check is a download nobody should run.
+      - name: checksums
+        run: cd dist && sha256sum * | tee SHA256SUMS
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "See the README and the threat model for what a matching lockfile does and does not prove." \
+            dist/*

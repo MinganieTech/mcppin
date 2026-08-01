@@ -105,8 +105,35 @@ func TestNumberBeyondExactDoubleIsReported(t *testing.T) {
 	}
 }
 
+// The notation is not the question. 9007199254740993 written with a point or
+// an exponent is the same integer beyond 2^53, and a rule that only looked at
+// plain integer literals would let the same value through in two spellings.
+func TestNotationDoesNotHideAnInexactValue(t *testing.T) {
+	unstable := []string{
+		`9007199254740993`,
+		`9007199254740993.0`,
+		`9.007199254740993e15`,
+		`1e30`,    // an integer far beyond 2^53, written short
+		`-1e30`,   //
+		`1e999`,   // beyond the range float64 holds at all
+		`-1e999`,  //
+		`1e-999`,  // below it, and not the zero it would canonicalise to
+		`1.0e400`, //
+	}
+	for _, literal := range unstable {
+		value, err := DecodeJSON([]byte(literal))
+		if err != nil {
+			t.Fatalf("%s: DecodeJSON: %v", literal, err)
+		}
+		if found := UnstableNumbers(value); len(found) != 1 {
+			t.Errorf("%s should have no reproducible identity, got %v", literal, found)
+		}
+	}
+}
+
 func TestOrdinaryNumbersAreNotReportedUnstable(t *testing.T) {
-	value, err := DecodeJSON([]byte(`{"a":9007199254740992,"b":-4500,"c":1.5,"d":1e30}`))
+	value, err := DecodeJSON([]byte(
+		`{"a":9007199254740992,"b":-4500,"c":1.5,"d":1.5e10,"e":0.1,"f":1e-7,"g":5e-324}`))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,21 +1,58 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "servers": [
     {
-      "name": "billing",
+      "id": "billing",
+      "reported_name": "stripe-mcp",
       "tools": [
         {
           "name": "stripe.refund",
-          "digest": "sha256:c2ee232c2b693ad11b2f2a6b21b9dc01653b660bd5dcc404e4eeef5ab628f5f0"
+          "digest": "sha256:c2ee232c2b693ad11b2f2a6b21b9dc01653b660bd5dcc404e4eeef5ab628f5f0",
+          "approved": {
+            "description": "Refund a charge that has already settled.",
+            "inputSchema": {
+              "properties": {
+                "amount": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "charge_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "charge_id",
+                "amount"
+              ],
+              "type": "object"
+            },
+            "name": "stripe.refund"
+          }
         }
       ]
     },
     {
-      "name": "repo",
+      "id": "repo",
+      "reported_name": "github-mcp",
       "tools": [
         {
           "name": "github.merge_pull_request",
-          "digest": "sha256:2f0c6c238af5276a07ac69911bd9d90838416bed5a3cbe25276a8975716e77a4"
+          "digest": "sha256:2f0c6c238af5276a07ac69911bd9d90838416bed5a3cbe25276a8975716e77a4",
+          "approved": {
+            "description": "Merge a pull request into its base branch.",
+            "inputSchema": {
+              "properties": {
+                "number": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "number"
+              ],
+              "type": "object"
+            },
+            "name": "github.merge_pull_request"
+          }
         }
       ]
     }
