@@ -139,7 +139,8 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 			RuleID: ruleUndecidableDigest,
 			Level:  "warning",
 			Message: sarifText{Text: fmt.Sprintf("%s %s carries %s (%s), which the canonical form does not identify",
-				unstable.Server, unstable.Tool, strings.Join(unstable.Literals, ", "), unstable.Where)},
+				Printable(unstable.Server), Printable(unstable.Tool),
+				Printable(strings.Join(unstable.Literals, ", ")), unstable.Where)},
 			Locations: location,
 			PartialFingerprints: map[string]string{
 				"mcppin/v1": fingerprint(ruleUndecidableDigest, unstable.Server, unstable.Tool),
@@ -149,7 +150,8 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 	if !result.CaptureComplete {
 		message := "the capture says it does not hold every tool the servers offered"
 		for _, unseen := range result.Unseen {
-			message += fmt.Sprintf("; %s %s was approved and was not in it", unseen.Server, unseen.Tool)
+			message += fmt.Sprintf("; %s %s was approved and was not in it",
+				Printable(unseen.Server), Printable(unseen.Tool))
 		}
 		results = append(results, sarifResult{
 			RuleID:              ruleIncompleteCapture,
@@ -182,13 +184,13 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 // point here as it is on a console: a SARIF message is displayed to a person,
 // and the text in it is the attacker's.
 func sarifMessage(finding Finding) string {
-	message := finding.Detail
+	message := Printable(finding.Detail)
 	if finding.Server != "" {
-		message = finding.Server + ": " + message
+		message = Printable(finding.Server) + ": " + message
 	}
 	for _, change := range finding.Changes {
 		message += fmt.Sprintf("\n%s\n- %s\n+ %s",
-			change.Pointer, printable(change.Before), printable(change.After))
+			Printable(change.Pointer), printableValue(change.Before), printableValue(change.After))
 	}
 	return message
 }

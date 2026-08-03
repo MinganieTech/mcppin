@@ -42,9 +42,10 @@ type LockedTool struct {
 // configuration; ReportedName is what the server called itself when it was
 // approved, kept so that a server renaming itself can be seen.
 type LockedServer struct {
-	ID           string       `json:"id"`
-	ReportedName string       `json:"reported_name,omitempty"`
-	Tools        []LockedTool `json:"tools"`
+	ID              string       `json:"id"`
+	ReportedName    string       `json:"reported_name,omitempty"`
+	ProtocolVersion string       `json:"protocol_version,omitempty"`
+	Tools           []LockedTool `json:"tools"`
 }
 
 // Lock is the approved tool surface. It is the record a later run is compared
@@ -157,6 +158,7 @@ func readLockedServer(raw any, index, version int) (LockedServer, error) {
 		}
 		server.ID = id
 		server.ReportedName, _ = entry["reported_name"].(string)
+		server.ProtocolVersion, _ = entry["protocol_version"].(string)
 	}
 
 	rawTools, ok := entry["tools"].([]any)
@@ -286,7 +288,12 @@ func checkDigest(digest string) error {
 func BuildLock(manifest *Manifest) (*Lock, error) {
 	lock := &Lock{SchemaVersion: LockSchemaVersion}
 	for _, server := range manifest.Servers {
-		locked := LockedServer{ID: server.ID, ReportedName: server.ReportedName, Tools: []LockedTool{}}
+		locked := LockedServer{
+			ID:              server.ID,
+			ReportedName:    server.ReportedName,
+			ProtocolVersion: server.ProtocolVersion,
+			Tools:           []LockedTool{},
+		}
 		for _, tool := range server.Tools {
 			name := toolName(tool)
 			pinned := LockedTool{Name: name, Approved: tool}
@@ -369,10 +376,10 @@ func (l *Lock) index() map[string]map[string]LockedTool {
 	return index
 }
 
-func (l *Lock) reportedNames() map[string]string {
-	names := make(map[string]string, len(l.Servers))
+func (l *Lock) servers() map[string]LockedServer {
+	byID := make(map[string]LockedServer, len(l.Servers))
 	for _, server := range l.Servers {
-		names[server.ID] = server.ReportedName
+		byID[server.ID] = server
 	}
-	return names
+	return byID
 }

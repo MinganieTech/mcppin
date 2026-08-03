@@ -148,6 +148,32 @@ func TestAnEnvelopeCannotBeEdited(t *testing.T) {
 	}
 }
 
+// An envelope is signed whole or not at all. A member this build does not
+// know is one the signature says nothing about, and one a person reading the
+// file would take for part of the approval.
+func TestAnEnvelopeCarryingAnUnsignedMemberIsRefused(t *testing.T) {
+	lock, public := signedLock(t)
+	manifest := filepath.Join(filepath.Dir(lock), "manifest.json")
+	path := SignaturePath(lock)
+
+	envelope, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	smuggled := strings.Replace(string(envelope), `{`, `{"approver": "Mallory",`, 1)
+	if err := os.WriteFile(path, []byte(smuggled), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr := run(t, "verify", "-lock", lock, "-pubkey", public, manifest)
+	if code != ExitUnreadable {
+		t.Fatalf("an envelope with an unsigned member was accepted, exited %d", code)
+	}
+	if !strings.Contains(stderr, "does not sign or read") {
+		t.Errorf("the refusal should say why: %s", stderr)
+	}
+}
+
 func TestAMissingSignatureFailsClosedOnceAKeyIsNamed(t *testing.T) {
 	manifest := write(t, "manifest.json", capturedSurface)
 	lock := lockFor(t, manifest)

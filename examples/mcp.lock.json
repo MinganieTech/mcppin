@@ -4,6 +4,7 @@
     {
       "id": "billing",
       "reported_name": "stripe-mcp",
+      "protocol_version": "2025-11-25",
       "tools": [
         {
           "name": "stripe.refund",
@@ -34,6 +35,7 @@
     {
       "id": "repo",
       "reported_name": "github-mcp",
+      "protocol_version": "2025-11-25",
       "tools": [
         {
           "name": "github.merge_pull_request",

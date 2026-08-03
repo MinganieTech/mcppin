@@ -22,10 +22,13 @@ func TestHelperProcessServer(t *testing.T) {
 	if os.Getenv(helperEnv) == "" {
 		t.Skip("this is the fake server the export test spawns, not a test")
 	}
-	if err := serve(readWriter{os.Stdin, os.Stdout}, [][]string{
-		{`{"name":"stripe.refund","description":"Refund a charge.","inputSchema":{"type":"object"}}`},
-		{`{"name":"stripe.charge","description":"Charge a card.","inputSchema":{"type":"object"}}`},
-	}); err != nil {
+	server := &fake{era: EraModern, rounds: [][]page{{
+		{tools: []string{`{"name":"stripe.refund","description":"Refund a charge.","inputSchema":{"type":"object"}}`},
+			cursor: "page2"},
+		{tools: []string{`{"name":"stripe.charge","description":"Charge a card.","inputSchema":{"type":"object"}}`},
+			last: true},
+	}}}
+	if err := server.serve(readWriter{os.Stdin, os.Stdout}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -61,7 +64,9 @@ func TestTheCapturedManifestIsOneMcppinReads(t *testing.T) {
 	manifestPath := filepath.Join(filepath.Dir(config), "manifest.json")
 
 	var stdout, stderr bytes.Buffer
-	if code := Main([]string{"-config", config, "-o", manifestPath}, &stdout, &stderr); code != exitOK {
+	code := Main([]string{"-config", config, "-o", manifestPath, "-protocol", FirstModernVersion},
+		&stdout, &stderr)
+	if code != exitOK {
 		t.Fatalf("exited %d\n%s", code, stderr.String())
 	}
 
@@ -72,8 +77,11 @@ func TestTheCapturedManifestIsOneMcppinReads(t *testing.T) {
 	if manifest.SchemaVersion != mcppin.ManifestSchemaVersion {
 		t.Errorf("schema version %d", manifest.SchemaVersion)
 	}
-	if !manifest.Complete || !manifest.CompleteStated {
-		t.Error("both pages were read, so the capture says it is complete")
+	if !manifest.Complete {
+		t.Error("both passes read both pages and agreed, so the capture is complete")
+	}
+	if manifest.Servers[0].ProtocolVersion != "2026-07-28" {
+		t.Errorf("what the server negotiated is recorded, got %q", manifest.Servers[0].ProtocolVersion)
 	}
 	if manifest.CapturedBy == "" || manifest.CapturedAt == "" {
 		t.Error("the capture should carry its own provenance")

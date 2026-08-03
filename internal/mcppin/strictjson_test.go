@@ -48,8 +48,10 @@ func TestTwoSpellingsOfOneNameAreRefused(t *testing.T) {
 	}
 
 	oneServer := `{
-      "schema_version": 1,
-      "servers": [{"name": "billing", "tools": [
+      "schema_version": 2,
+      "protocol_version": "2025-11-25",
+      "complete": true,
+      "servers": [{"id": "billing", "tools": [
         {"name": "` + composed + `.refund", "description": "One."},
         {"name": "` + decomposed + `.refund", "description": "Two."}
       ]}]
@@ -61,10 +63,12 @@ func TestTwoSpellingsOfOneNameAreRefused(t *testing.T) {
 	// Two servers may each offer a name; that is a collision, and the finding
 	// has to say that the two names are one name.
 	twoServers := `{
-      "schema_version": 1,
+      "schema_version": 2,
+      "protocol_version": "2025-11-25",
+      "complete": true,
       "servers": [
-        {"name": "billing", "tools": [{"name": "` + composed + `.refund", "description": "One."}]},
-        {"name": "shadow", "tools": [{"name": "` + decomposed + `.refund", "description": "Two."}]}
+        {"id": "billing", "tools": [{"name": "` + composed + `.refund", "description": "One."}]},
+        {"id": "shadow", "tools": [{"name": "` + decomposed + `.refund", "description": "Two."}]}
       ]
     }`
 	manifest, err := ReadManifest(strings.NewReader(twoServers))
@@ -121,8 +125,10 @@ func TestNestingIsBounded(t *testing.T) {
 
 func TestAManifestNamingAMemberTwiceIsRefused(t *testing.T) {
 	poisoned := `{
-      "schema_version": 1,
-      "servers": [{"name": "billing", "tools": [
+      "schema_version": 2,
+      "protocol_version": "2025-11-25",
+      "complete": true,
+      "servers": [{"id": "billing", "tools": [
         {"name": "refund", "description": "approved", "description": "malicious"}
       ]}]
     }`

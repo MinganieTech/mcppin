@@ -20,11 +20,16 @@ speaks no MCP, and opens no connection.
    captured. A gateway that paginates `tools/list` and stops early, or that drops a field it does
    not understand, produces a manifest that describes a surface that is not the one being served.
 
-   A version 2 manifest has to declare `complete`, and a capture that declares itself partial can
-   no longer prove that a tool was withdrawn: those tools are reported as unseen and the run exits
-   `3`. `mcppin-export` sets that field from what happened - it is true only when the cursor loop
-   reached the end - so the claim comes from the code that did the capture rather than from the
-   person writing the file. A version 1 manifest cannot say, and the run says so.
+   A manifest has to declare `complete`, and a capture that declares itself partial can no longer
+   prove that a tool was withdrawn: those tools are reported as unseen and the run exits `3`.
+   Version 1 manifests, which had no way to say, are refused rather than assumed complete.
+
+   `mcppin-export` sets the field from what happened. Reaching the last page of `tools/list` is not
+   enough: MCP does not promise that a paginated list is a snapshot, so a server free to change
+   between two requests can hide a tool at a page boundary, and every page would still arrive. The
+   exporter therefore traverses the list twice and claims `complete` only if both traversals see
+   the same surface. **This still does not prove a snapshot** - a server can change and change back
+   between the two - and it is a check where there was none.
 
    None of that helps against an exporter that lies, and a manifest written by hand can say
    anything. This is still the largest assumption in the tool.
@@ -63,6 +68,9 @@ speaks no MCP, and opens no connection.
 | A document two parsers would read differently | Yes | refused, exit `4` |
 | A lockfile whose digest and content disagree | Yes | every digest is recomputed from the approved object beside it |
 | A capture that stopped early | Partly | it has to declare itself, and then absence proves nothing; a capture that lies about it is assumption 1 |
+| A tool list that changes while it is being read | Partly | two traversals must agree before `complete` is claimed; a server that changes and changes back defeats it |
+| A server steering the client with a malformed answer | Yes | the JSON-RPC envelope is checked, not assumed, and the result is decoded by the same strict reader as everything else |
+| Terminal escapes in served text | Yes | nothing a server touches reaches a console without being rendered by code point |
 | A baseline poisoned before approval | Partly | the lockfile holds the approved text, so the poison is in the diff a reviewer reads - if they read it. See assumption 3 |
 | Two names equal only after Unicode NFC | Yes | member names, server identities and tool names; the rule comes from the mcp-lock draft, see [interop](interop.md) |
 | A server that behaves differently from what it describes | **No** | the description is all there is to hash |

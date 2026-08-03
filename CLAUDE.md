@@ -37,9 +37,17 @@ untrusted server gets to answer. It may import `internal/mcppin`; the dependency
 other way.
 
 - It reads the `mcpServers` object clients already share, and the identity of a server is the key
-  it was filed under - never the name the server reports for itself.
-- `complete` is set from what happened, never from what was hoped. It is true only when the
-  `tools/list` cursor was followed to the end.
+  it was filed under - never the name the server reports for itself, which the specification says
+  is self-reported and must not drive a security decision.
+- **`complete` is set from what happened, never from what was hoped.** Reaching the last page says
+  the traversal finished; MCP does not promise that a paginated list is a snapshot, so the list is
+  read twice by default and `complete` is true only when both readings agree. Anything that would
+  let a torn or partial read say `true` is a bug.
+- **The wire era follows from the protocol version.** `2024-10-07` through `2025-11-25` open with
+  `initialize`; from `2026-07-28` there is no handshake and `_meta` carries the version, the client
+  info and the client capabilities on every request. A revision this build has not been written
+  against is refused, never guessed at: a wrong wire format produces an artefact that looks like a
+  surface.
 - A server that cannot be reached fails the whole export. An absent server is not a smaller
   surface, it is an unknown one.
 
@@ -76,10 +84,15 @@ other way.
   itself is compared is wrong.
 - **Printed text is ASCII, and served text is never printed as itself.** These tools run in CI logs
   and on Windows consoles whose code page renders anything else as `?` - and a description is
-  attacker-controlled text, so a diff that pasted it verbatim would hand a terminal escape or a
-  right-to-left override to the reviewer it is meant to inform. Everything outside printable ASCII
-  is named by code point in the text and SARIF renderings. The `json` report is the one output not
-  meant for a terminal, and the one that carries values as they were served.
+  attacker-controlled text, so a line that pasted it verbatim would hand a terminal escape or a
+  right-to-left override to the reviewer it is meant to inform, and an ANSI sequence can erase the
+  finding printed above it. Everything the server touches goes through `Printable` on its way to a
+  terminal: descriptions, tool names, server names, its JSON-RPC error messages, and the lines it
+  writes to its own standard error. Anything printed with `%s` straight from a manifest is a bug.
+  The `json` report is the one output not meant for a terminal, and the one that carries values as
+  they were served.
+- **One place decides the verdict.** `Outcome` returns the status and the exit code; the text, the
+  JSON report and the process all read it from there. Two copies of that rule would disagree.
 - **The lockfile keeps the approved tool, not only its digest.** Two digests say that something
   changed and never what, and a lockfile nobody can review is how a description gets approved
   without being read. Every digest is recomputed from the object beside it on read: a file whose
@@ -125,9 +138,14 @@ other way.
   removing a field or changing what it means bumps `ReportSchemaVersion`, `ManifestSchemaVersion`
   or `LockSchemaVersion`. A digest carries its algorithm as a prefix so a second one can be added
   without breaking old files.
-- **Every schema version this project has ever written stays readable.** The upgrade path for a
+- **Every lockfile version this project has ever written stays readable.** The upgrade path for a
   format change must never be "re-approve the surface", because approving a surface you have not
-  compared is the failure this tool exists to prevent.
+  compared is the failure this tool exists to prevent. Manifests are the opposite case: a capture
+  costs nothing to produce again, so a manifest version whose meaning this build would have to
+  guess at - version 1, which could not say whether it was complete - is refused instead.
+- **What is not read is not signed.** A signature envelope carrying a member this build does not
+  know is refused, because a signature that covers only the fields one reader happened to parse is
+  a signature that says nothing about the rest.
 - The version lives in `internal/mcppin/cli.go` and nowhere else. The release workflow refuses a
   tag that disagrees with it.
 - `gofmt -l .` stays empty, `go vet ./...` and `go test ./...` stay green on Linux, Windows and

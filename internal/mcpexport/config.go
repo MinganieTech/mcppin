@@ -63,12 +63,21 @@ func ReadConfig(path string) ([]ServerConfig, error) {
 			return nil, fmt.Errorf("%s: server %q has no command", path, id)
 		}
 		server := ServerConfig{ID: id, Command: command}
-		for i, rawArg := range asArray(entry["args"]) {
-			arg, ok := rawArg.(string)
+		if raw, present := entry["args"]; present {
+			// Present and not an array is a configuration whose author meant
+			// something this build would silently drop, and the command it
+			// would run is not the one they wrote.
+			args, ok := raw.([]any)
 			if !ok {
-				return nil, fmt.Errorf("%s: server %q argument %d is not a string", path, id, i+1)
+				return nil, fmt.Errorf("%s: server %q has args that are not an array", path, id)
 			}
-			server.Args = append(server.Args, arg)
+			for i, rawArg := range args {
+				arg, ok := rawArg.(string)
+				if !ok {
+					return nil, fmt.Errorf("%s: server %q argument %d is not a string", path, id, i+1)
+				}
+				server.Args = append(server.Args, arg)
+			}
 		}
 		if rawEnv, present := entry["env"]; present {
 			env, ok := rawEnv.(map[string]any)
@@ -90,9 +99,4 @@ func ReadConfig(path string) ([]ServerConfig, error) {
 		return nil, errors.New("the configuration declares no server")
 	}
 	return servers, nil
-}
-
-func asArray(value any) []any {
-	array, _ := value.([]any)
-	return array
 }

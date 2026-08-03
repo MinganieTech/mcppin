@@ -187,22 +187,29 @@ func ReadSignature(r io.Reader) (*Signature, error) {
 		return nil, err
 	}
 	signature := &Signature{SchemaVersion: version}
-	for _, field := range []struct {
-		key  string
-		into *string
-	}{
-		{"schema", &signature.Schema},
-		{"algorithm", &signature.Algorithm},
-		{"lock_digest", &signature.LockDigest},
-		{"public_key_fingerprint", &signature.PublicKeyFingerprint},
-		{"signed_at", &signature.SignedAt},
-		{"signature", &signature.Signature},
-	} {
-		text, ok := object[field.key].(string)
+	known := map[string]*string{
+		"schema":                 &signature.Schema,
+		"algorithm":              &signature.Algorithm,
+		"lock_digest":            &signature.LockDigest,
+		"public_key_fingerprint": &signature.PublicKeyFingerprint,
+		"signed_at":              &signature.SignedAt,
+		"signature":              &signature.Signature,
+	}
+	for key, into := range known {
+		text, ok := object[key].(string)
 		if !ok || text == "" {
-			return nil, fmt.Errorf("the signature has no %s", field.key)
+			return nil, fmt.Errorf("the signature has no %s", key)
 		}
-		*field.into = text
+		*into = text
+	}
+	// What is not read is not signed. An envelope carrying an extra member -
+	// an "approver", an "expires_at", anything a person might read as part of
+	// the approval - would sit next to a signature that says nothing about it,
+	// so the envelope is refused rather than partly believed.
+	for key := range object {
+		if _, expected := known[key]; !expected && key != "schema_version" {
+			return nil, fmt.Errorf("the signature carries %q, which this build does not sign or read", key)
+		}
 	}
 	return signature, nil
 }

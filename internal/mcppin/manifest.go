@@ -9,10 +9,14 @@ import (
 	"time"
 )
 
-// ManifestSchemaVersion is the manifest version this build writes. Version 1
-// is still read: a build that could only read what it writes would force every
-// existing baseline to be re-approved, and re-approving a surface you have not
-// compared is the one thing this tool exists to prevent.
+// ManifestSchemaVersion is the manifest version this build reads and writes.
+//
+// Version 1 is refused rather than read. It had no way to say whether the
+// capture held every tool, so reading one would mean deciding on its behalf
+// that it did - and a removal "proven" against a capture of unknown
+// completeness is not proven. Unlike a lockfile, a manifest costs nothing to
+// produce again: capture the surface once more rather than assume something
+// about the last capture.
 const ManifestSchemaVersion = 2
 
 // Server is one MCP server and the tools it offers.
@@ -27,23 +31,23 @@ const ManifestSchemaVersion = 2
 type Server struct {
 	ID           string
 	ReportedName string
-	Tools        []map[string]any
+	// ProtocolVersion is the revision this server negotiated, which two
+	// servers in one capture are free to disagree about.
+	ProtocolVersion string
+	Tools           []map[string]any
 }
 
 // Manifest is the tool surface exposed to an agent, across every server.
 type Manifest struct {
 	SchemaVersion   int
 	ProtocolVersion string
-	// Complete says whether the capture holds every tool the servers offered.
-	// A capture that stopped early cannot support any statement about absence.
-	Complete bool
-	// CompleteStated is false for a version 1 manifest, which had no way to
-	// say. Such a manifest is read as complete, because that was the contract
-	// it was written under, and the run says so rather than assuming quietly.
-	CompleteStated bool
-	CapturedAt     string
-	CapturedBy     string
-	Servers        []Server
+	// Complete says whether the capture holds every tool the servers offered,
+	// as one surface. A capture that stopped early, or whose passes disagreed,
+	// cannot support any statement about absence.
+	Complete   bool
+	CapturedAt string
+	CapturedBy string
+	Servers    []Server
 }
 
 // LoadManifest reads a manifest from a file.
@@ -80,16 +84,18 @@ func ReadManifest(r io.Reader) (*Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	if version != 1 && version != ManifestSchemaVersion {
-		return nil, fmt.Errorf("schema_version is %d, this build reads versions 1 and %d",
+	if version == 1 {
+		return nil, errors.New("this is a version 1 manifest, which could not say whether the " +
+			"capture held every tool; capture the surface again with a version 2 exporter")
+	}
+	if version != ManifestSchemaVersion {
+		return nil, fmt.Errorf("schema_version is %d, this build reads version %d",
 			version, ManifestSchemaVersion)
 	}
 
-	manifest := &Manifest{SchemaVersion: version, Complete: true}
-	if version >= 2 {
-		if err := readCapture(object, manifest); err != nil {
-			return nil, err
-		}
+	manifest := &Manifest{SchemaVersion: version}
+	if err := readCapture(object, manifest); err != nil {
+		return nil, err
 	}
 
 	rawServers, ok := object["servers"].([]any)
@@ -98,7 +104,7 @@ func ReadManifest(r io.Reader) (*Manifest, error) {
 	}
 	ids := newNameSet()
 	for i, rawServer := range rawServers {
-		server, err := readServer(rawServer, i, version)
+		server, err := readServer(rawServer, i)
 		if err != nil {
 			return nil, err
 		}
@@ -132,7 +138,6 @@ func readCapture(object map[string]any, manifest *Manifest) error {
 		return errors.New("complete is missing; a capture has to say whether it holds every tool")
 	}
 	manifest.Complete = complete
-	manifest.CompleteStated = true
 
 	if raw, present := object["captured_at"]; present {
 		at, ok := raw.(string)
@@ -154,31 +159,23 @@ func readCapture(object map[string]any, manifest *Manifest) error {
 	return nil
 }
 
-func readServer(raw any, index, version int) (Server, error) {
+func readServer(raw any, index int) (Server, error) {
 	entry, ok := raw.(map[string]any)
 	if !ok {
 		return Server{}, fmt.Errorf("server %d is not an object", index+1)
 	}
 
 	server := Server{}
-	if version == 1 {
-		// Version 1 had one name doing two jobs. It becomes the identity and
-		// nothing else: it was never a statement about what the server called
-		// itself, and reading it as one would make the first version 2 capture
-		// look like a rename.
-		name, _ := entry["name"].(string)
-		if name == "" {
-			return Server{}, fmt.Errorf("server %d has no name", index+1)
-		}
-		server.ID = name
-	} else {
-		id, _ := entry["id"].(string)
-		if id == "" {
-			return Server{}, fmt.Errorf("server %d has no id", index+1)
-		}
-		server.ID = id
-		server.ReportedName, _ = entry["reported_name"].(string)
+	id, _ := entry["id"].(string)
+	if id == "" {
+		return Server{}, fmt.Errorf("server %d has no id", index+1)
 	}
+	server.ID = id
+	server.ReportedName, _ = entry["reported_name"].(string)
+	// What the server negotiated is kept: a surface approved over one protocol
+	// revision was not approved over another, and a build that dropped this on
+	// the floor could not say so.
+	server.ProtocolVersion, _ = entry["protocol_version"].(string)
 
 	rawTools, ok := entry["tools"].([]any)
 	if !ok {

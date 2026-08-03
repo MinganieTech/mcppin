@@ -36,7 +36,18 @@ jobs:
       - run: go mod verify
       - run: go mod tidy -diff
       - run: go vet ./...
-      # No -race: nothing here runs concurrently, and it would only make the
-      # matrix depend on a C toolchain being present.
       - run: go test ./...
       - run: go build ./...
+
+  # The exporter reads a server's pipes while forwarding its standard error, so
+  # there is concurrency to get wrong. -race needs a C toolchain, which is why
+  # it is one job rather than a column in the matrix above.
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - run: go test -race ./...

@@ -73,8 +73,14 @@ VIOLATION tool-changed
 
 Served text is attacker-controlled, so nothing outside printable ASCII reaches the console as
 itself: a diff that pasted it verbatim would hand a terminal escape, a right-to-left override or a
-zero-width character straight to the reviewer it is meant to inform. The `json` report carries the
-values exactly as they were served; the text and SARIF renderings name them by code point.
+zero-width character straight to the reviewer it is meant to inform, and an ANSI sequence can erase
+the line above it - which is where the finding was. That covers every string a server touches:
+descriptions, tool names, server names, the server's own JSON-RPC error messages, and the lines it
+writes to its standard error while being captured. The `json` report carries the values exactly as
+they were served; the text and SARIF renderings name them by code point.
+
+The `json` report also carries the run's own verdict, as `status` and `exit_code`, so a reader
+never has to re-derive the rule and disagree with the process about it.
 
 ### Policies
 
@@ -88,8 +94,11 @@ values exactly as they were served; the text and SARIF renderings name them by c
 | `hidden-characters` | any string in the tool object carries text that occupies no visible space |
 | `mixed-script-name` | a tool name draws on several writing systems |
 | `invalid-tool-name` | a tool name carries characters outside `A-Za-z0-9._-` |
+| `protocol-changed` | a server negotiates a different protocol revision than the one it was approved over |
 
-The first four are the default gate. The rest describe the manifest rather than a departure from
+The first four are the default gate. `protocol-changed` is reported and not gated by default: the
+revision depends on what the exporter asked for as much as on the server, so a changed flag would
+otherwise read as drift. The rest describe the manifest rather than a departure from
 the approved surface - a surface can be approved with a name collision already in it - so they are
 reported always and gated on request.
 
@@ -188,7 +197,7 @@ that produced it:
 ```json
 {
   "schema_version": 2,
-  "protocol_version": "2026-07-28",
+  "protocol_version": "2025-11-25",
   "complete": true,
   "captured_at": "2026-08-01T09:12:00Z",
   "captured_by": "mcppin-export/0.1.0",
@@ -196,6 +205,8 @@ that produced it:
     {
       "id": "billing",
       "reported_name": "stripe-mcp",
+      "protocol_version": "2025-11-25",
+      "passes": 2,
       "tools": [
         {"name": "stripe.refund", "description": "Refund a charge.", "inputSchema": {"type": "object"}}
       ]
@@ -205,17 +216,28 @@ that produced it:
 ```
 
 `id` is the identity, and it comes from the configuration that declared the server - the one thing
-about a server the server does not choose. `reported_name` is what it calls itself, which MCP does
-not guarantee to be unique and which can change between two captures; it is evidence, and
-`server-renamed` is what happens when it moves.
+about a server the server does not choose. `reported_name` is what it calls itself, which the
+specification says is self-reported and must not drive a security decision; it is evidence, and
+`server-renamed` is what happens when it moves - including when it stops being said at all.
+`protocol_version` is the revision that server negotiated, and `protocol-changed` reports when it
+moves.
 
-`complete` says whether the capture holds every tool the servers offered. A capture that admits it
-stopped early **cannot prove that a tool was withdrawn**: those tools are reported as unseen, the
-run exits `3`, and `tool-removed` is summarised as `PARTIAL`. `mcppin-export` sets the field from
-what happened, not from what was hoped.
+`complete` says whether the capture holds every tool the servers offered, **as one surface**.
+Reaching the last page of `tools/list` does not say that: MCP does not promise that a paginated
+list is a snapshot, so a server free to change between two requests can hide a tool at a page
+boundary. `mcppin-export` therefore reads the list twice by default and sets `complete` only when
+both readings agree, recording in `passes` how many it did. That does not prove a snapshot either -
+a server can change and change back - but it is the difference between a claim nobody checked and
+one that survived a check.
 
-Version 1 manifests, which had a single `name` per server and no way to state completeness, are
-still read. The run says so rather than assuming quietly.
+A capture that says it is not complete **cannot prove that a tool was withdrawn**: those tools are
+reported as unseen, the run exits `3`, and `tool-removed` is summarised as `PARTIAL`.
+
+Version 1 manifests are refused. They had no way to state completeness, so reading one would mean
+deciding on its behalf that it was complete, and a removal "proven" against a capture of unknown
+coverage is not proven. A manifest costs nothing to produce again: capture the surface once more.
+Version 1 *lockfiles* are a different matter and are still read - re-approving a surface you have
+not compared is the failure this tool exists to prevent.
 
 ## The lockfile
 
@@ -261,7 +283,9 @@ mcppin verify -lock mcp.lock.json -pubkey signing-key.pem.pub manifest.json
 ```
 
 Ed25519, detached, one file beside the lockfile. The envelope is signed as a whole, not just the
-digest inside it, so a signature cannot be lifted onto another one:
+digest inside it, so a signature cannot be lifted onto another one - and an envelope carrying a
+member this build does not sign, an `approver` or an `expires_at` a person might read as part of
+the approval, is refused rather than half-believed:
 
 ```json
 {
@@ -295,11 +319,18 @@ says when the one on disk no longer matches what it just wrote.
 ## Capturing
 
 `mcppin-export` reads the `mcpServers` object every stdio client configuration shares, runs each
-server, performs the handshake, and follows the `tools/list` cursor to the end:
+server, and follows the `tools/list` cursor to the end - twice, by default:
 
 ```bash
-mcppin-export -config examples/mcp.json -server billing -o manifest.json
+mcppin-export -config examples/mcp.json -o manifest.json
 ```
+
+MCP has two wire eras and this exporter speaks both. `2024-10-07` through `2025-11-25` open with
+the `initialize` handshake; from `2026-07-28` there is no handshake at all, and the protocol
+version, the client info and the client capabilities travel in `_meta` on every request while the
+server names itself in the `_meta` of every result. `-protocol` picks the revision to ask for and
+the era follows from it. The default is `2025-11-25`, which is what servers in the field speak
+today; a revision this build has not been written against is refused rather than guessed at.
 
 It **runs the commands in that configuration**, and is exactly as trusted as the client whose
 configuration it is. A server that cannot be reached fails the whole export rather than producing a

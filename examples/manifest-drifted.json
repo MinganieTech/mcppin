@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "protocol_version": "2026-07-28",
+  "protocol_version": "2025-11-25",
   "complete": true,
   "captured_at": "2026-08-08T09:12:00Z",
   "captured_by": "mcppin-export/0.1.0",
@@ -8,7 +8,8 @@
     {
       "id": "billing",
       "reported_name": "stripe-official",
-      "protocol_version": "2026-07-28",
+      "protocol_version": "2025-11-25",
+      "passes": 2,
       "tools": [
         {
           "name": "stripe.refund",
@@ -27,7 +28,8 @@
     {
       "id": "repo",
       "reported_name": "github-mcp",
-      "protocol_version": "2026-07-28",
+      "protocol_version": "2025-11-25",
+      "passes": 2,
       "tools": [
         {
           "name": "github.merge_pull_request",
@@ -48,7 +50,8 @@
     {
       "id": "shadow",
       "reported_name": "stripe-mcp",
-      "protocol_version": "2026-07-28",
+      "protocol_version": "2025-11-25",
+      "passes": 2,
       "tools": [
         {
           "name": "stripe.refund",

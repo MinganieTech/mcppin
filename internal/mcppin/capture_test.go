@@ -49,21 +49,22 @@ func TestAVersion2ManifestHasToSayWhatItIs(t *testing.T) {
 	}
 }
 
-func TestAVersion1ManifestStillReadsAndSaysItCannotTell(t *testing.T) {
-	manifest := manifestOf(t, approvedSurface)
-	if manifest.SchemaVersion != 1 {
-		t.Fatalf("schema version %d", manifest.SchemaVersion)
+// A version 1 manifest could not say whether its capture held every tool, so
+// reading one means deciding on its behalf that it did. A manifest costs
+// nothing to produce again; the assumption would cost a proof.
+func TestAVersion1ManifestIsRefused(t *testing.T) {
+	old := `{
+      "schema_version": 1,
+      "servers": [{"name": "billing", "tools": [
+        {"name": "stripe.refund", "description": "Refund a charge.", "inputSchema": {}}
+      ]}]
+    }`
+	_, err := ReadManifest(strings.NewReader(old))
+	if err == nil {
+		t.Fatal("a version 1 manifest was read")
 	}
-	if manifest.CompleteStated {
-		t.Error("version 1 had no way to state completeness")
-	}
-	if !manifest.Complete {
-		t.Error("it is read as complete, which was the contract it was written under")
-	}
-	// The one name it carried is an identity, not a claim about what the
-	// server calls itself.
-	if manifest.Servers[0].ID != "billing" || manifest.Servers[0].ReportedName != "" {
-		t.Errorf("unexpected identity %+v", manifest.Servers[0])
+	if !strings.Contains(err.Error(), "capture the surface again") {
+		t.Errorf("the refusal should say what to do instead: %v", err)
 	}
 }
 
@@ -118,12 +119,50 @@ func TestAServerRenamingItselfIsReported(t *testing.T) {
 	}
 }
 
+// A server that stops saying what it calls itself has changed what it says as
+// surely as one that renames itself.
+func TestAServerThatStopsNamingItselfIsDriftToo(t *testing.T) {
+	lock := lockOf(t, manifestOf(t, capturedSurface))
+	silent := strings.Replace(capturedSurface, `"reported_name": "stripe-mcp",`, "", 1)
+
+	found := verifyOf(t, manifestOf(t, silent), lock).FindingsFor(PolicyServerRenamed)
+	if len(found) != 1 {
+		t.Fatalf("want 1 finding, got %+v", found)
+	}
+	if !strings.Contains(found[0].Detail, "no longer says") {
+		t.Errorf("the finding should say the name went away: %s", found[0].Detail)
+	}
+}
+
+// The revision a surface was served over is part of what was approved, and it
+// is reported rather than gated: it depends on what the exporter asked for.
+func TestAServerOnAnotherProtocolIsReported(t *testing.T) {
+	approved := strings.Replace(capturedSurface, `"reported_name": "stripe-mcp",`,
+		`"reported_name": "stripe-mcp", "protocol_version": "2025-11-25",`, 1)
+	lock := lockOf(t, manifestOf(t, approved))
+	moved := strings.Replace(approved, `"protocol_version": "2025-11-25",`,
+		`"protocol_version": "2026-07-28",`, 1)
+
+	result := verifyOf(t, manifestOf(t, moved), lock)
+	if found := result.FindingsFor(PolicyProtocolChanged); len(found) != 1 {
+		t.Fatalf("want 1 finding, got %+v", found)
+	}
+	if _, code := Outcome(result, DefaultPolicies()); code != ExitOK {
+		t.Errorf("it is reported and not gated by default, exited %d", code)
+	}
+	if _, code := Outcome(result, Policies()); code != ExitPolicyFailed {
+		t.Errorf("-fail-on all covers it, exited %d", code)
+	}
+}
+
 // A version 1 lockfile has to keep working, or the upgrade path is "re-approve
 // the surface without comparing it", which is the failure this tool prevents.
 func TestAVersion1LockfileStillVerifies(t *testing.T) {
 	surface := `{
-      "schema_version": 1,
-      "servers": [{"name": "billing", "tools": [
+      "schema_version": 2,
+      "protocol_version": "2025-11-25",
+      "complete": true,
+      "servers": [{"id": "billing", "tools": [
         {"name": "stripe.refund", "description": "Refund a charge.", "inputSchema": {"type": "object"}}
       ]}]
     }`

@@ -107,8 +107,10 @@ func TestAnUnknownPolicyIsAUsageError(t *testing.T) {
 
 func TestAToolThatCannotBePinnedExitsUndecidable(t *testing.T) {
 	imprecise := `{
-      "schema_version": 1,
-      "servers": [{"name": "ledger", "tools": [
+      "schema_version": 2,
+      "protocol_version": "2025-11-25",
+      "complete": true,
+      "servers": [{"id": "ledger", "tools": [
         {"name": "ledger.post", "description": "Post.", "inputSchema": {"maximum": 9007199254740993}}
       ]}]
     }`
@@ -140,8 +142,10 @@ func TestAToolThatCannotBePinnedExitsUndecidable(t *testing.T) {
 // departure, never invent one, so the one that was proven is still proven.
 func TestAProvenDepartureOutranksAnUndecidableDigest(t *testing.T) {
 	surface := `{
-      "schema_version": 1,
-      "servers": [{"name": "ledger", "tools": [
+      "schema_version": 2,
+      "protocol_version": "2025-11-25",
+      "complete": true,
+      "servers": [{"id": "ledger", "tools": [
         {"name": "ledger.post", "description": "Post.", "inputSchema": {"maximum": 9007199254740993}},
         {"name": "ledger.read", "description": "Read.", "inputSchema": {"type": "object"}}
       ]}]

@@ -121,10 +121,6 @@ func runLock(args []string, stdout, stderr io.Writer) int {
 	for _, finding := range inspection.Findings {
 		fmt.Fprintf(stderr, "warning: %s: %s\n", finding.Policy, finding.Detail)
 	}
-	if !manifest.CompleteStated {
-		fmt.Fprintf(stderr, "warning: this manifest is schema_version %d and cannot say whether the "+
-			"capture held every tool; version %d can\n", manifest.SchemaVersion, ManifestSchemaVersion)
-	}
 
 	lock, err := BuildLock(manifest)
 	if err != nil {
@@ -261,13 +257,6 @@ func runKey(args []string, stdout, stderr io.Writer) int {
 	}
 
 	publicPath := *output + ".pub"
-	for _, path := range []string{*output, publicPath} {
-		if _, err := os.Stat(path); err == nil {
-			fmt.Fprintf(stderr, "mcppin: %s exists; refusing to replace a key\n", path)
-			return ExitUnreadable
-		}
-	}
-
 	public, private, err := GenerateSigningKey()
 	if err != nil {
 		fmt.Fprintf(stderr, "mcppin: %v\n", err)
@@ -283,13 +272,19 @@ func runKey(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "mcppin: %v\n", err)
 		return ExitUnreadable
 	}
-	// 0600 rather than the usual 0644, and on Windows it is the file system's
-	// inherited permissions that decide. Check them.
-	if err := os.WriteFile(*output, privatePEM, 0o600); err != nil {
+
+	// Created, not written: checking for the file and then writing it leaves a
+	// window in which something else creates it, and losing that race means
+	// overwriting a signing key. 0600 is honoured on Unix; on Windows the
+	// inherited permissions decide, so check them.
+	if err := createExclusively(*output, privatePEM, 0o600); err != nil {
 		fmt.Fprintf(stderr, "mcppin: %v\n", err)
 		return ExitUnreadable
 	}
-	if err := os.WriteFile(publicPath, publicPEM, 0o644); err != nil {
+	if err := createExclusively(publicPath, publicPEM, 0o644); err != nil {
+		// A private key with no public key beside it is a trap: the operator
+		// would have no way to verify what it signs.
+		os.Remove(*output)
 		fmt.Fprintf(stderr, "mcppin: %v\n", err)
 		return ExitUnreadable
 	}
@@ -301,6 +296,28 @@ func runKey(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "private key %s\npublic key  %s\nfingerprint %s\n", *output, publicPath, fingerprint)
 	return ExitOK
+}
+
+// createExclusively writes a file that must not exist yet, and says so in the
+// terms the caller cares about when it does.
+func createExclusively(path string, content []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%s exists; refusing to replace a key", path)
+		}
+		return err
+	}
+	if _, err := file.Write(content); err != nil {
+		file.Close()
+		os.Remove(path)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(path)
+		return err
+	}
+	return nil
 }
 
 // readKeyMaterial reads a key from a file, or from standard input when the
@@ -397,15 +414,8 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	for _, policy := range gate {
-		if len(result.FindingsFor(policy)) > 0 {
-			return ExitPolicyFailed
-		}
-	}
-	if len(result.Unstable) > 0 || !result.CaptureComplete {
-		return ExitUndecidable
-	}
-	return ExitOK
+	_, exit := Outcome(result, gate)
+	return exit
 }
 
 // checkTrust settles who approved the lockfile, and returns the exit code to

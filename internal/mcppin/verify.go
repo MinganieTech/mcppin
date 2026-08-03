@@ -30,6 +30,12 @@ const (
 	// configuration gave it, so this is the server changing its own story, not
 	// a second server.
 	PolicyServerRenamed = "server-renamed"
+	// PolicyProtocolChanged fires when a server negotiates a different
+	// protocol revision than the one the surface was approved over. It is
+	// reported and not gated by default: the revision depends on what the
+	// exporter asked for as much as on the server, so a changed exporter flag
+	// would otherwise read as drift.
+	PolicyProtocolChanged = "protocol-changed"
 )
 
 // Policies lists every policy name accepted by -fail-on.
@@ -43,6 +49,7 @@ func Policies() []string {
 		PolicyMixedScriptName,
 		PolicyInvalidToolName,
 		PolicyServerRenamed,
+		PolicyProtocolChanged,
 	}
 }
 
@@ -210,7 +217,7 @@ func Verify(manifest *Manifest, lock *Lock) (Result, error) {
 		current[server.ID] = tools
 	}
 	approved := lock.index()
-	result.Findings = append(result.Findings, renamedServers(manifest, lock)...)
+	result.Findings = append(result.Findings, changedServers(manifest, lock)...)
 
 	for _, server := range sortedKeys(approved) {
 		for _, tool := range sortedKeys(approved[server]) {
@@ -275,23 +282,42 @@ func changedTool(server, tool string, was LockedTool, now map[string]any, digest
 	}
 }
 
-// renamedServers reports a server that no longer calls itself what it called
-// itself when it was approved. Both sides have to have said something: a
-// version 1 lockfile never recorded the reported name, and reading its absence
-// as a rename would fire on every first capture after an upgrade.
-func renamedServers(manifest *Manifest, lock *Lock) []Finding {
-	approved := lock.reportedNames()
+// changedServers reports what a server says about itself that no longer
+// matches what it said when it was approved.
+//
+// A name that has gone missing counts. A server that stops naming itself has
+// changed what it says as surely as one that renames itself, and treating
+// silence as "no change" would make the drift disappear by removing the field
+// that carried it. What the approval did not record is another matter: a
+// version 1 lockfile never held a reported name, and reading its absence as a
+// change would fire on every first run after an upgrade.
+func changedServers(manifest *Manifest, lock *Lock) []Finding {
+	approved := lock.servers()
 	var findings []Finding
 	for _, server := range manifest.Servers {
 		was, locked := approved[server.ID]
-		if !locked || was == "" || server.ReportedName == "" || was == server.ReportedName {
+		if !locked {
 			continue
 		}
-		findings = append(findings, Finding{
-			Policy: PolicyServerRenamed, Server: server.ID,
-			Detail: fmt.Sprintf("the server approved as %q now calls itself %q",
-				was, server.ReportedName),
-		})
+		if was.ReportedName != "" && was.ReportedName != server.ReportedName {
+			detail := fmt.Sprintf("the server approved as %q now calls itself %q",
+				was.ReportedName, server.ReportedName)
+			if server.ReportedName == "" {
+				detail = fmt.Sprintf("the server approved as %q no longer says what it calls itself",
+					was.ReportedName)
+			}
+			findings = append(findings, Finding{
+				Policy: PolicyServerRenamed, Server: server.ID, Detail: detail,
+			})
+		}
+		if was.ProtocolVersion != "" && server.ProtocolVersion != "" &&
+			was.ProtocolVersion != server.ProtocolVersion {
+			findings = append(findings, Finding{
+				Policy: PolicyProtocolChanged, Server: server.ID,
+				Detail: fmt.Sprintf("the surface was approved over protocol %s and is now served over %s",
+					was.ProtocolVersion, server.ProtocolVersion),
+			})
+		}
 	}
 	return findings
 }
