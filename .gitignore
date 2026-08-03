@@ -10,3 +10,7 @@
 # public key beside it is named .pem.pub and is meant to be, since it is the
 # trust anchor a verify run is pointed at.
 *.pem
+
+# The working conventions are for whoever is working in this tree. What the
+# project promises is in the README and the threat model.
+/CLAUDE.md
