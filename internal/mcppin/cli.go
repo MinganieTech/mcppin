@@ -12,8 +12,13 @@ import (
 	"time"
 )
 
-// Version is declared here and nowhere else.
-const Version = "0.1.0"
+// Version is declared here and nowhere else. The release workflow refuses a
+// tag that disagrees with it.
+//
+// Below 1.0 the formats are still moving: the manifest, the lockfile and the
+// JSON report each carry their own schema version, and a build says which ones
+// it reads. What will not move quietly is the exit codes.
+const Version = "0.2.0"
 
 // now and stdin are variables so a test can pin the moment a signature was
 // made and feed a key in without reaching for the process's own input.

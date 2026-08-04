@@ -17,6 +17,12 @@ reviewer.
 What it does not prove is in [the threat model](docs/threat-model.md), and reading it before
 relying on this in a pipeline is the point of it being written down.
 
+> **Status: 0.2.0, experimental.** The checks are tested and the exit codes are a contract worth
+> branching on. The formats are not settled: the manifest, the lockfile and the JSON report each
+> carry a schema version, and those may move before 1.0. Every lockfile version this project has
+> written stays readable, because the upgrade path must never be "re-approve a surface you have not
+> compared". See the [changelog](CHANGELOG.md).
+
 ## Two binaries
 
 | | |
@@ -200,7 +206,7 @@ that produced it:
   "protocol_version": "2025-11-25",
   "complete": true,
   "captured_at": "2026-08-01T09:12:00Z",
-  "captured_by": "mcppin-export/0.1.0",
+  "captured_by": "mcppin-export/0.2.0",
   "servers": [
     {
       "id": "billing",
@@ -400,6 +406,16 @@ One dependency: `golang.org/x/text`, for Unicode normalisation. The bar for addi
 it cannot be written here correctly - normalisation tables are maintained against the standard by
 people who do nothing else, and JSON canonicalisation, which is load-bearing and has to be
 auditable, is written here rather than imported.
+
+## Contributing, and reporting a problem
+
+[CONTRIBUTING.md](CONTRIBUTING.md) is the short version of what a change here has to hold to -
+including the one boundary worth knowing before opening an issue: this tool never judges what a
+description *says*.
+
+A vulnerability goes through [SECURITY.md](SECURITY.md), privately, not through an issue. That file
+also lists what is out of scope by design, so a report is not spent on something already written
+down.
 
 ## License
 

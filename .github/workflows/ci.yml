@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+# Actions are pinned to commit SHAs rather than tags: a tag can be moved, and
+# an action runs with the same rights as the workflow. Dependabot keeps them
+# current, because a pin nobody updates is a pin that rots.
 jobs:
   test:
     # The output is ASCII and the lockfile is written through a rename because
@@ -18,8 +21,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           check-latest: true
@@ -45,9 +48,34 @@ jobs:
   race:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           check-latest: true
       - run: go test -race ./...
+
+  # A tool that tells people what to trust should know when what it is built
+  # from stops being trustworthy.
+  vulnerabilities:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # Short runs on every push. They are not looking for a crash so much as for
+  # an input this build reads differently from the way it writes.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - run: go test -run=Fuzz -fuzz=FuzzDecodeAndCanonicalize -fuzztime=60s ./internal/mcppin/
+      - run: go test -run=Fuzz -fuzz=FuzzReadManifest -fuzztime=60s ./internal/mcppin/

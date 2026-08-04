@@ -3,7 +3,7 @@
   "protocol_version": "2025-11-25",
   "complete": true,
   "captured_at": "2026-08-01T09:12:00Z",
-  "captured_by": "mcppin-export/0.1.0",
+  "captured_by": "mcppin-export/0.2.0",
   "servers": [
     {
       "id": "billing",

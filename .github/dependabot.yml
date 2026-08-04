@@ -1,0 +1,15 @@
+version: 2
+
+# The actions below are pinned to commit SHAs, which is the only pin a tag
+# cannot be moved out from under. A pin nobody updates is a pin that rots, so
+# the two go together.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
