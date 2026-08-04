@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"unicode/utf8"
 )
 
 // ReportSchemaVersion versions the JSON report. Adding a field is free;
@@ -162,7 +161,11 @@ func (r Result) clean() bool {
 
 func writeChanges(w io.Writer, changes []Change) {
 	for _, change := range changes {
-		fmt.Fprintf(w, "    %s\n", Printable(change.Pointer))
+		where := Printable(change.Pointer)
+		if where == "" {
+			where = "the tool object"
+		}
+		fmt.Fprintf(w, "    %s\n", where)
 		if change.Before != "" || change.Kind != changeAdded {
 			fmt.Fprintf(w, "    - %s\n", printableValue(change.Before))
 		}
@@ -183,16 +186,18 @@ func writeChanges(w io.Writer, changes []Change) {
 // meant to inform - and an ANSI sequence can erase the line above it, which is
 // where the finding was.
 func Printable(text string) string {
+	// Every character that is not plain ASCII is named the same way, U+FFFD
+	// included. Calling that one "invalid UTF-8" would be wrong twice over:
+	// invalid UTF-8 never gets this far, so a replacement character here is
+	// one a server sent on purpose, and saying otherwise would describe the
+	// reader's failure instead of the server's text.
 	var out strings.Builder
 	for _, r := range text {
-		switch {
-		case r >= 0x20 && r < 0x7F:
+		if r >= 0x20 && r < 0x7F {
 			out.WriteRune(r)
-		case r == utf8.RuneError:
-			out.WriteString("<invalid UTF-8>")
-		default:
-			fmt.Fprintf(&out, "<U+%04X>", r)
+			continue
 		}
+		fmt.Fprintf(&out, "<U+%04X>", r)
 	}
 	return out.String()
 }

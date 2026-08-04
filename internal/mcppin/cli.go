@@ -134,13 +134,19 @@ func runLock(args []string, stdout, stderr io.Writer) int {
 			return ExitUnreadable
 		}
 	} else {
+		// What was there before is read first, so that re-locking an unchanged
+		// surface does not announce a signature problem it has not caused. A
+		// warning that fires when nothing happened is a warning people learn
+		// to skip.
+		previous, _ := os.ReadFile(*output)
 		if err := WriteLockFile(*output, lock); err != nil {
 			fmt.Fprintf(stderr, "mcppin: %v\n", err)
 			return ExitUnreadable
 		}
+		current, _ := os.ReadFile(*output)
 		// The old signature is not deleted: removing somebody's signature is
 		// not this command's decision, and a stale one fails closed anyway.
-		if _, err := os.Stat(SignaturePath(*output)); err == nil {
+		if _, err := os.Stat(SignaturePath(*output)); err == nil && !bytes.Equal(previous, current) {
 			fmt.Fprintf(stderr, "warning: %s no longer matches this lockfile; sign it again\n",
 				SignaturePath(*output))
 		}
@@ -377,9 +383,18 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "mcppin: %v\n", err)
 		return ExitUnreadable
 	}
-	lock, err := LoadLock(*lockPath)
+	// The lockfile is read once, and the same bytes are both parsed and put to
+	// the signature. Reading it twice would leave a moment between the two in
+	// which the file could change, and the run would then verify a surface
+	// against one lockfile while vouching for another.
+	lockfile, err := os.ReadFile(*lockPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "mcppin: %v\n", err)
+		return ExitUnreadable
+	}
+	lock, err := ReadLock(bytes.NewReader(lockfile))
+	if err != nil {
+		fmt.Fprintf(stderr, "mcppin: %s: %v\n", *lockPath, err)
 		return ExitUnreadable
 	}
 
@@ -393,7 +408,7 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	// fails it is not a smaller approval, it is not an approval: exit 4,
 	// because the record could not be read as one, and nothing about the
 	// served surface has been proven either way.
-	signedBy, code := checkTrust(*lockPath, *signaturePath, trusted, stderr)
+	signedBy, code := checkTrust(lockfile, *lockPath, *signaturePath, trusted, stderr)
 	if code != ExitOK {
 		return code
 	}
@@ -418,14 +433,16 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	return exit
 }
 
-// checkTrust settles who approved the lockfile, and returns the exit code to
-// stop on when the answer is nobody this run trusts.
+// checkTrust settles who approved the lockfile that was read, and returns the
+// exit code to stop on when the answer is nobody this run trusts. It is given
+// the bytes rather than the path, so that what is vouched for is what was
+// parsed.
 //
 // With no -pubkey the question is not asked, and a signature sitting next to
 // the lockfile is said to be unchecked rather than silently passed over: a
 // repository that signs and a pipeline that forgot to check is the failure
 // this is here to prevent.
-func checkTrust(lockPath, signaturePath string, trusted []string, stderr io.Writer) (string, int) {
+func checkTrust(lockfile []byte, lockPath, signaturePath string, trusted []string, stderr io.Writer) (string, int) {
 	path := signaturePath
 	if path == "" {
 		path = SignaturePath(lockPath)
@@ -452,11 +469,6 @@ func checkTrust(lockPath, signaturePath string, trusted []string, stderr io.Writ
 		keys = append(keys, key)
 	}
 
-	lockfile, err := os.ReadFile(lockPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "mcppin: %v\n", err)
-		return "", ExitUnreadable
-	}
 	signature, err := LoadSignature(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "mcppin: %v\n", err)

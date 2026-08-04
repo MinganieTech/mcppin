@@ -204,13 +204,21 @@ func TestAnUncheckedSignatureIsSaidToBeUnchecked(t *testing.T) {
 	}
 }
 
-func TestReLockingSaysTheSignatureIsStale(t *testing.T) {
+func TestReLockingSaysTheSignatureIsStaleOnlyWhenItIs(t *testing.T) {
 	lock, _ := signedLock(t)
 	manifest := filepath.Join(filepath.Dir(lock), "manifest.json")
 
-	_, _, warnings := run(t, "lock", "-o", lock, manifest)
+	// Approving the same surface again produces the same lockfile, so the
+	// signature still holds. A warning here would be one people learn to skip.
+	if _, _, quiet := run(t, "lock", "-o", lock, manifest); strings.Contains(quiet, "no longer matches") {
+		t.Errorf("nothing changed, so nothing is stale:\n%s", quiet)
+	}
+
+	moved := write(t, "moved.json", strings.Replace(capturedSurface,
+		"Refund a charge that has already settled.", "Refund a charge.", 1))
+	_, _, warnings := run(t, "lock", "-o", lock, moved)
 	if !strings.Contains(warnings, "no longer matches") {
-		t.Errorf("re-locking should say the signature is stale:\n%s", warnings)
+		t.Errorf("the lockfile changed, so the signature is stale:\n%s", warnings)
 	}
 	if _, err := os.Stat(SignaturePath(lock)); err != nil {
 		t.Error("and must not delete somebody else's signature")

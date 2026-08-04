@@ -76,8 +76,11 @@ func collectChanges(before, after any, pointer string, changes *[]Change) {
 
 	from, to := renderValue(before), renderValue(after)
 	if from != to || beforeIsObject != afterIsObject || beforeIsArray != afterIsArray {
+		// The pointer stays a pointer, empty at the root as RFC 6901 has it.
+		// Naming the root in prose belongs to whatever renders this, not to
+		// the field a machine reads as a location.
 		*changes = append(*changes, Change{
-			Kind: changeChanged, Pointer: pointerOf(pointer), Before: from, After: to})
+			Kind: changeChanged, Pointer: pointer, Before: from, After: to})
 	}
 }
 

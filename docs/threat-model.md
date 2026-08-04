@@ -46,6 +46,13 @@ speaks no MCP, and opens no connection.
    covers the canonical form of the lockfile; a run given a public key refuses a lockfile that is
    unsigned, stale, edited or signed by anyone else, and exits `4`.
 
+   A signature says "this surface was approved by this key", and not "this is the approval in
+   force". An attacker who can write the lockfile can put back an **older lockfile and its own
+   valid signature** - one from before a tool was withdrawn, or before a description was
+   tightened - and every check passes. `signed_at` is in the envelope and nothing enforces it,
+   because a file cannot tell you it is the newest one; only something that remembers can. What
+   catches a rollback is the diff in the pull request that removes the newer lockfile.
+
    That moves the assumption rather than removing it: **the private key is now the thing that
    approves surfaces**. Whoever holds it can approve anything, and this build does not encrypt it,
    hold it, or ask for a passphrase - use whatever your operating system or secret store already
@@ -78,6 +85,7 @@ speaks no MCP, and opens no connection.
 | The surface changing between the check and the call | **No** | `mcppin` runs once; it is not a proxy |
 | A tampered lockfile | Yes, if signed | `verify -pubkey` refuses anything but a valid signature by a key you named; unsigned, see assumption 2 |
 | A stolen signing key | **No** | it approves whatever it is pointed at; see assumption 2 |
+| A rollback to an older signed lockfile | **No** | the signature is still valid, and a file cannot say it is the newest one; the diff that removes the newer lockfile is what shows it |
 | A truncated or partial export | **No** | see assumption 1; a short manifest looks like removals, or like nothing at all |
 
 ## Where the remaining risk goes

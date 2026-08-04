@@ -10,6 +10,8 @@ package mcpexport
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -151,6 +153,13 @@ func (s *Session) Call(method string, params map[string]any) (map[string]any, er
 		}
 		answerID, ok := envelope["id"].(json.Number)
 		if !ok || answerID.String() != fmt.Sprint(id) {
+			// An error with no id is what a server sends when it could not
+			// read the request well enough to echo one. Nothing else is in
+			// flight, so it is this request's answer; skipping it would leave
+			// the capture waiting for a reply that is never coming.
+			if rawError, isError := envelope["error"]; isError && !ok {
+				return nil, describeError(method, rawError)
+			}
 			continue
 		}
 
@@ -386,7 +395,7 @@ func CaptureSurface(session *Session, passes int) (Capture, error) {
 		if err != nil {
 			return capture, err
 		}
-		digest, err := surfaceDigest(tools)
+		digest, err := surfaceFingerprint(tools)
 		if err != nil {
 			return capture, err
 		}
@@ -406,19 +415,29 @@ func CaptureSurface(session *Session, passes int) (Capture, error) {
 	return capture, nil
 }
 
-// surfaceDigest is the identity of a whole tool list, ordered by name so that
-// two traversals which merely paginated differently still agree.
-func surfaceDigest(tools []map[string]any) (string, error) {
-	ordered := make([]any, 0, len(tools))
-	for _, tool := range tools {
-		ordered = append(ordered, tool)
-	}
+// surfaceFingerprint identifies a whole tool list well enough to tell one
+// traversal from another, ordered by name so that two traversals which merely
+// paginated differently still agree.
+//
+// This is deliberately not the canonical digest. That one is defined over
+// values a double can hold, and refuses to produce anything for a tool
+// carrying a number outside them - which is a statement the verifier makes
+// about pinning, not a reason for the capture to fail. An exporter that
+// refused such a tool would leave the surface undescribed rather than
+// undecidable. Two encodings inside one process are all this comparison needs.
+func surfaceFingerprint(tools []map[string]any) (string, error) {
+	ordered := append([]map[string]any(nil), tools...)
 	sort.Slice(ordered, func(i, j int) bool {
-		left, _ := ordered[i].(map[string]any)["name"].(string)
-		right, _ := ordered[j].(map[string]any)["name"].(string)
+		left, _ := ordered[i]["name"].(string)
+		right, _ := ordered[j]["name"].(string)
 		return left < right
 	})
-	return mcppin.Digest(ordered)
+	encoded, err := json.Marshal(ordered)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // readToolPage decodes one page. The tools are kept as the objects they

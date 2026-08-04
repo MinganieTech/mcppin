@@ -113,13 +113,21 @@ func (f *fake) serve(connection io.ReadWriter) error {
 func captureFrom(t *testing.T, server *fake, protocol string, passes int) (Capture, error) {
 	t.Helper()
 	client, remote := net.Pipe()
+	// The fake outlives the call - it is still reading when the client hangs
+	// up - so its failures come back on a channel. Reporting them with t from
+	// inside the goroutine would panic if it lost the race with the end of the
+	// test, which is a flake nobody could reproduce.
+	failed := make(chan error, 1)
 	go func() {
 		defer remote.Close()
-		if err := server.serve(remote); err != nil {
+		failed <- server.serve(remote)
+	}()
+	t.Cleanup(func() {
+		client.Close()
+		if err := <-failed; err != nil {
 			t.Errorf("the fake server failed: %v", err)
 		}
-	}()
-	defer client.Close()
+	})
 
 	session, err := NewSession(client, client, protocol, "test")
 	if err != nil {
@@ -241,6 +249,25 @@ func TestAToolListedTwiceIsNotASurface(t *testing.T) {
 	}}}, LatestLegacyVersion, 1)
 	if err == nil {
 		t.Fatal("a tool listed on two pages was captured")
+	}
+}
+
+// A tool carrying a number no digest can identify is still a tool. The
+// capture's business is to record what the server said; deciding that it
+// cannot be pinned is the verifier's, and an exporter that refused to capture
+// it would leave the surface undescribed instead of undecidable.
+func TestAToolWithAnUnpinnableNumberIsStillCaptured(t *testing.T) {
+	capture, err := captureFrom(t, &fake{era: EraLegacy, rounds: onePage(
+		`{"name":"ledger.post","description":"Post.","inputSchema":{"maximum":1e999}}`)},
+		LatestLegacyVersion, 2)
+	if err != nil {
+		t.Fatalf("CaptureSurface: %v", err)
+	}
+	if len(capture.Tools) != 1 {
+		t.Fatalf("want the tool, got %d", len(capture.Tools))
+	}
+	if !capture.Complete {
+		t.Error("both passes saw the same surface")
 	}
 }
 

@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -186,30 +188,44 @@ func ReadSignature(r io.Reader) (*Signature, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Read in a fixed order: which missing field an envelope is refused for
+	// should not depend on how a map happened to be walked.
 	signature := &Signature{SchemaVersion: version}
-	known := map[string]*string{
-		"schema":                 &signature.Schema,
-		"algorithm":              &signature.Algorithm,
-		"lock_digest":            &signature.LockDigest,
-		"public_key_fingerprint": &signature.PublicKeyFingerprint,
-		"signed_at":              &signature.SignedAt,
-		"signature":              &signature.Signature,
+	fields := []struct {
+		key  string
+		into *string
+	}{
+		{"schema", &signature.Schema},
+		{"algorithm", &signature.Algorithm},
+		{"lock_digest", &signature.LockDigest},
+		{"public_key_fingerprint", &signature.PublicKeyFingerprint},
+		{"signed_at", &signature.SignedAt},
+		{"signature", &signature.Signature},
 	}
-	for key, into := range known {
-		text, ok := object[key].(string)
+	known := make(map[string]bool, len(fields)+1)
+	known["schema_version"] = true
+	for _, field := range fields {
+		known[field.key] = true
+		text, ok := object[field.key].(string)
 		if !ok || text == "" {
-			return nil, fmt.Errorf("the signature has no %s", key)
+			return nil, fmt.Errorf("the signature has no %s", field.key)
 		}
-		*into = text
+		*field.into = text
 	}
 	// What is not read is not signed. An envelope carrying an extra member -
 	// an "approver", an "expires_at", anything a person might read as part of
 	// the approval - would sit next to a signature that says nothing about it,
 	// so the envelope is refused rather than partly believed.
+	unexpected := make([]string, 0, len(object))
 	for key := range object {
-		if _, expected := known[key]; !expected && key != "schema_version" {
-			return nil, fmt.Errorf("the signature carries %q, which this build does not sign or read", key)
+		if !known[key] {
+			unexpected = append(unexpected, key)
 		}
+	}
+	if len(unexpected) > 0 {
+		sort.Strings(unexpected)
+		return nil, fmt.Errorf("the signature carries %s, which this build does not sign or read",
+			strings.Join(unexpected, ", "))
 	}
 	return signature, nil
 }
