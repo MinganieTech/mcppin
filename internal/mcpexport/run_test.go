@@ -101,7 +101,7 @@ func TestTheCapturedManifestIsOneMcppinReads(t *testing.T) {
 	}
 
 	// And the whole point: the manifest can be pinned and verified.
-	lock, err := mcppin.BuildLock(manifest)
+	lock, err := mcppin.BuildLock(manifest, 1)
 	if err != nil {
 		t.Fatalf("BuildLock: %v", err)
 	}

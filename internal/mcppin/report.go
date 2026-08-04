@@ -29,6 +29,7 @@ type jsonReport struct {
 	Status          string         `json:"status"`
 	ExitCode        int            `json:"exit_code"`
 	CaptureComplete bool           `json:"capture_complete"`
+	Unexamined      []string       `json:"unexamined_servers"`
 	SignedBy        string         `json:"signed_by,omitempty"`
 	Findings        []Finding      `json:"findings"`
 	Unstable        []UnstableTool `json:"unstable_digests"`
@@ -43,7 +44,7 @@ func Outcome(result Result, gate []string) (string, int) {
 			return "violation", ExitPolicyFailed
 		}
 	}
-	if len(result.Unstable) > 0 || !result.CaptureComplete {
+	if len(result.Unstable) > 0 || !result.CaptureComplete || len(result.Unexamined) > 0 {
 		return "undecidable", ExitUndecidable
 	}
 	return "clean", ExitOK
@@ -71,6 +72,7 @@ func WriteJSON(w io.Writer, result Result, gate []string) error {
 		Status:          status,
 		ExitCode:        code,
 		CaptureComplete: result.CaptureComplete,
+		Unexamined:      result.Unexamined,
 		SignedBy:        result.SignedBy,
 		Findings:        result.Findings,
 		Unstable:        result.Unstable,
@@ -133,6 +135,16 @@ func WriteText(w io.Writer, result Result, gate []string) {
 		fmt.Fprintln(w)
 	}
 
+	if len(result.Unexamined) > 0 {
+		fmt.Fprintf(w, "UNEXAMINED: %d approved server(s) were outside what this capture claims to cover\n",
+			len(result.Unexamined))
+		for _, server := range result.Unexamined {
+			fmt.Fprintf(w, "  %s was approved and this capture did not look at it\n", Printable(server))
+		}
+		fmt.Fprintln(w, "  nothing here says they are unchanged; verify them against a capture of their own")
+		fmt.Fprintln(w)
+	}
+
 	if len(gate) == 0 {
 		fmt.Fprintln(w, "NO GATE: -fail-on none was requested, so nothing above changes the exit code")
 		return
@@ -142,7 +154,8 @@ func WriteText(w io.Writer, result Result, gate []string) {
 		switch {
 		case len(found) > 0:
 			fmt.Fprintf(w, "FAIL %s: %d finding(s)\n", policy, len(found))
-		case policy == PolicyToolChanged && len(result.Unstable) > 0,
+		case len(result.Unexamined) > 0,
+			policy == PolicyToolChanged && len(result.Unstable) > 0,
 			policy == PolicyToolRemoved && !result.CaptureComplete,
 			policy == PolicyToolAdded && !result.CaptureComplete:
 			// Nothing was proven among what could be compared, and what could
@@ -155,8 +168,13 @@ func WriteText(w io.Writer, result Result, gate []string) {
 	}
 }
 
+// clean is what the opening line answers, and it has to answer for everything
+// the run could not settle. A surface that "matches what was approved" printed
+// above a list of servers nobody looked at is the reassurance this report is
+// not allowed to give.
 func (r Result) clean() bool {
-	return len(r.Findings) == 0 && len(r.Unstable) == 0 && len(r.Unseen) == 0 && r.CaptureComplete
+	return len(r.Findings) == 0 && len(r.Unstable) == 0 && len(r.Unseen) == 0 &&
+		len(r.Unexamined) == 0 && r.CaptureComplete
 }
 
 func writeChanges(w io.Writer, changes []Change) {

@@ -119,6 +119,79 @@ func TestAServerRenamingItselfIsReported(t *testing.T) {
 	}
 }
 
+// A capture of part of a configuration says so, and what it did not look at is
+// reported as unexamined rather than withdrawn.
+func TestACaptureOutsideItsScopeProvesNothingAboutTheRest(t *testing.T) {
+	both := `{
+      "schema_version": 2,
+      "protocol_version": "2025-11-25",
+      "complete": true,
+      "servers": [
+        {"id": "billing", "tools": [{"name": "refund", "description": "Refund.", "inputSchema": {}}]},
+        {"id": "repo", "tools": [{"name": "merge", "description": "Merge.", "inputSchema": {}}]}
+      ]
+    }`
+	lock := lockOf(t, manifestOf(t, both))
+
+	scoped := `{
+      "schema_version": 2,
+      "protocol_version": "2025-11-25",
+      "complete": true,
+      "scope": ["billing"],
+      "servers": [
+        {"id": "billing", "tools": [{"name": "refund", "description": "Refund.", "inputSchema": {}}]}
+      ]
+    }`
+	result := verifyOf(t, manifestOf(t, scoped), lock)
+	if found := result.FindingsFor(PolicyToolRemoved); len(found) != 0 {
+		t.Errorf("repo was not looked at, not withdrawn: %+v", found)
+	}
+	if len(result.Unexamined) != 1 || result.Unexamined[0] != "repo" {
+		t.Fatalf("want repo reported as unexamined, got %+v", result.Unexamined)
+	}
+	if _, code := Outcome(result, DefaultPolicies()); code != ExitUndecidable {
+		t.Errorf("a scoped run proves nothing about the rest, exited %d", code)
+	}
+
+	var out bytes.Buffer
+	WriteText(&out, result, DefaultPolicies())
+	if strings.Contains(out.String(), "PASS tool-removed") {
+		t.Errorf("nothing here may read as a pass:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "matches what was approved") {
+		t.Errorf("nor may the opening line, with a server nobody looked at:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "UNEXAMINED") {
+		t.Errorf("the report should name what it did not look at:\n%s", out.String())
+	}
+
+	// The same manifest without the claim is a capture of everything, and then
+	// repo really is missing.
+	unscoped := strings.Replace(scoped, `"scope": ["billing"],`, "", 1)
+	if found := verifyOf(t, manifestOf(t, unscoped), lock).FindingsFor(PolicyToolRemoved); len(found) != 1 {
+		t.Fatalf("without a scope the capture claims to be everything: %+v", found)
+	}
+}
+
+func TestAScopeHasToMatchWhatTheCaptureCarries(t *testing.T) {
+	cases := map[string]string{
+		"a scope naming what is not there": `{"schema_version": 2, "protocol_version": "2025-11-25",
+			"complete": true, "scope": ["billing", "repo"],
+			"servers": [{"id": "billing", "tools": []}]}`,
+		"a server the scope does not name": `{"schema_version": 2, "protocol_version": "2025-11-25",
+			"complete": true, "scope": ["billing"],
+			"servers": [{"id": "billing", "tools": []}, {"id": "repo", "tools": []}]}`,
+		"an empty scope": `{"schema_version": 2, "protocol_version": "2025-11-25",
+			"complete": true, "scope": [],
+			"servers": [{"id": "billing", "tools": []}]}`,
+	}
+	for what, document := range cases {
+		if _, err := ReadManifest(strings.NewReader(document)); err == nil {
+			t.Errorf("%s was accepted", what)
+		}
+	}
+}
+
 // A server that stops saying what it calls itself has changed what it says as
 // surely as one that renames itself.
 func TestAServerThatStopsNamingItselfIsDriftToo(t *testing.T) {
@@ -310,7 +383,9 @@ func TestSarifCarriesTheRunAndItsSeverities(t *testing.T) {
 	if result0.Locations[0].PhysicalLocation.ArtifactLocation.URI != "examples/manifest.json" {
 		t.Errorf("the result should point at the manifest: %+v", result0.Locations)
 	}
-	if len(log.Runs[0].Tool.Driver.Rules) != len(Policies())+2 {
+	// Every policy, plus the three statements that are not policies: a digest
+	// that could not be compared, a partial capture, an unexamined server.
+	if len(log.Runs[0].Tool.Driver.Rules) != len(Policies())+3 {
 		t.Errorf("every rule should be declared: %+v", log.Runs[0].Tool.Driver.Rules)
 	}
 }

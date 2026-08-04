@@ -18,6 +18,7 @@ const sarifSchema = "https://json.schemastore.org/sarif-2.1.0.json"
 const (
 	ruleUndecidableDigest = "undecidable-digest"
 	ruleIncompleteCapture = "incomplete-capture"
+	ruleUnexaminedServer  = "unexamined-server"
 )
 
 type sarifLog struct {
@@ -89,6 +90,7 @@ var ruleDescriptions = map[string]string{
 	PolicyServerRenamed:    "A server no longer calls itself what it called itself when it was approved.",
 	ruleUndecidableDigest:  "A tool carries a number the canonical form does not identify, so it has no digest worth comparing.",
 	ruleIncompleteCapture:  "The capture says it does not hold every tool, so absence proves nothing.",
+	ruleUnexaminedServer:   "An approved server was outside what this capture claims to cover, and was not compared.",
 }
 
 // WriteSARIF emits the run as SARIF 2.1.0. A gated policy is an error and
@@ -101,7 +103,7 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 	}
 
 	rules := make([]sarifRule, 0, len(ruleDescriptions))
-	for _, id := range append(Policies(), ruleUndecidableDigest, ruleIncompleteCapture) {
+	for _, id := range append(Policies(), ruleUndecidableDigest, ruleIncompleteCapture, ruleUnexaminedServer) {
 		level := "warning"
 		if gated[id] {
 			level = "error"
@@ -144,6 +146,18 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 			Locations: location,
 			PartialFingerprints: map[string]string{
 				"mcppin/v1": fingerprint(ruleUndecidableDigest, unstable.Server, unstable.Tool),
+			},
+		})
+	}
+	for _, server := range result.Unexamined {
+		results = append(results, sarifResult{
+			RuleID: ruleUnexaminedServer,
+			Level:  "warning",
+			Message: sarifText{Text: fmt.Sprintf(
+				"%s was approved and this capture did not claim to cover it", Printable(server))},
+			Locations: location,
+			PartialFingerprints: map[string]string{
+				"mcppin/v1": fingerprint(ruleUnexaminedServer, server, ""),
 			},
 		})
 	}

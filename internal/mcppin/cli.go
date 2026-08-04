@@ -122,10 +122,17 @@ func runLock(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "warning: %s: %s\n", finding.Policy, finding.Detail)
 	}
 
-	lock, err := BuildLock(manifest)
+	lock, err := BuildLock(manifest, 1)
 	if err != nil {
 		fmt.Fprintf(stderr, "mcppin: %v\n", err)
 		return ExitUnreadable
+	}
+	// Approving over an existing lockfile counts one past it, and counts the
+	// same when the surface has not moved. Written to standard output there is
+	// nothing to count from, and this is the first approval as far as the run
+	// can tell.
+	if *output != "" {
+		lock.ApprovalSerial = SerialFor(*output, lock)
 	}
 
 	if *output == "" {
@@ -344,6 +351,8 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	var trusted stringList
 	fs.Var(&trusted, "pubkey", "an SPKI PEM key the lockfile must be signed by, repeatable")
 	signaturePath := fs.String("signature", "", "the detached signature (default <lock>.sig)")
+	minSerial := fs.Int("min-serial", 0, "refuse a lockfile approved before this serial")
+	maxAge := fs.Duration("max-signature-age", 0, "refuse a signature older than this")
 	format := fs.String("format", "text", "text, json or sarif")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: mcppin verify -lock mcp.lock.json [flags] <manifest.json>\n\nflags:\n")
@@ -397,6 +406,15 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "mcppin: %s: %v\n", *lockPath, err)
 		return ExitUnreadable
 	}
+	// The floor comes from the command line, which is to say from wherever the
+	// pipeline is configured - somewhere an attacker who can rewrite the
+	// lockfile does not necessarily reach. A lockfile below it is an older
+	// approval put back in place, signature and all.
+	if lock.ApprovalSerial < *minSerial {
+		fmt.Fprintf(stderr, "mcppin: %s is approval %d and this run was told to accept nothing "+
+			"below %d\n", *lockPath, lock.ApprovalSerial, *minSerial)
+		return ExitUnreadable
+	}
 
 	result, err := Verify(manifest, lock)
 	if err != nil {
@@ -408,7 +426,7 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	// fails it is not a smaller approval, it is not an approval: exit 4,
 	// because the record could not be read as one, and nothing about the
 	// served surface has been proven either way.
-	signedBy, code := checkTrust(lockfile, *lockPath, *signaturePath, trusted, stderr)
+	signedBy, code := checkTrust(lockfile, *lockPath, *signaturePath, trusted, *maxAge, stderr)
 	if code != ExitOK {
 		return code
 	}
@@ -442,12 +460,18 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 // the lockfile is said to be unchecked rather than silently passed over: a
 // repository that signs and a pipeline that forgot to check is the failure
 // this is here to prevent.
-func checkTrust(lockfile []byte, lockPath, signaturePath string, trusted []string, stderr io.Writer) (string, int) {
+func checkTrust(lockfile []byte, lockPath, signaturePath string, trusted []string,
+	maxAge time.Duration, stderr io.Writer) (string, int) {
 	path := signaturePath
 	if path == "" {
 		path = SignaturePath(lockPath)
 	}
 	if len(trusted) == 0 {
+		if maxAge > 0 {
+			fmt.Fprintf(stderr, "mcppin: -max-signature-age asks how old a signature is, "+
+				"which means checking it; name a key with -pubkey\n")
+			return "", ExitUsage
+		}
 		if _, err := os.Stat(path); err == nil {
 			fmt.Fprintf(stderr, "warning: %s exists and was not checked; pass -pubkey to check it\n", path)
 		}
@@ -478,6 +502,21 @@ func checkTrust(lockfile []byte, lockPath, signaturePath string, trusted []strin
 	if err != nil {
 		fmt.Fprintf(stderr, "mcppin: %s: %v\n", path, err)
 		return "", ExitUnreadable
+	}
+	// signed_at is the one date worth trusting here: whoever replays an old
+	// lockfile does not hold the key, so they cannot move it. It bounds how
+	// far back a rollback can reach; it does not stop one.
+	if maxAge > 0 {
+		signedAt, err := time.Parse(time.RFC3339, signature.SignedAt)
+		if err != nil {
+			fmt.Fprintf(stderr, "mcppin: %s: signed_at is not an RFC 3339 timestamp: %v\n", path, err)
+			return "", ExitUnreadable
+		}
+		if age := now().Sub(signedAt); age > maxAge {
+			fmt.Fprintf(stderr, "mcppin: %s was signed %s ago and this run accepts nothing older "+
+				"than %s\n", lockPath, age.Round(time.Second), maxAge)
+			return "", ExitUnreadable
+		}
 	}
 	return fingerprint, ExitOK
 }

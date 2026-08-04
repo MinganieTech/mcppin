@@ -41,7 +41,7 @@ func manifestOf(t *testing.T, document string) *Manifest {
 
 func lockOf(t *testing.T, manifest *Manifest) *Lock {
 	t.Helper()
-	lock, err := BuildLock(manifest)
+	lock, err := BuildLock(manifest, 1)
 	if err != nil {
 		t.Fatalf("BuildLock: %v", err)
 	}

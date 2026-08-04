@@ -1,6 +1,7 @@
 package mcppin
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,8 +53,18 @@ type LockedServer struct {
 // against - the point of the tool is that approving a description once does
 // not approve whatever replaces it.
 type Lock struct {
-	SchemaVersion int            `json:"schema_version"`
-	Servers       []LockedServer `json:"servers"`
+	SchemaVersion int `json:"schema_version"`
+	// ApprovalSerial counts approvals of this lockfile, and exists for one
+	// reason: a signature says a surface was approved, never that it is the
+	// approval in force. Someone who can write the file can put back an older
+	// lockfile with its own valid signature, and every check passes.
+	//
+	// The serial does not fix that by itself - nothing inside a file can, since
+	// a file cannot say it is the newest one. It gives the operator something
+	// to hold a floor against, with `verify -min-serial`, from somewhere the
+	// attacker does not control.
+	ApprovalSerial int            `json:"approval_serial,omitempty"`
+	Servers        []LockedServer `json:"servers"`
 }
 
 // LoadLock reads a lockfile.
@@ -106,11 +117,22 @@ func ReadLock(r io.Reader) (*Lock, error) {
 			version, LockSchemaVersion)
 	}
 
+	lock := &Lock{SchemaVersion: version}
+	if _, present := object["approval_serial"]; present {
+		serial, err := intField(object, "approval_serial")
+		if err != nil {
+			return nil, err
+		}
+		if serial < 1 {
+			return nil, fmt.Errorf("approval_serial is %d; an approval is counted from 1", serial)
+		}
+		lock.ApprovalSerial = serial
+	}
+
 	rawServers, ok := object["servers"].([]any)
 	if !ok {
 		return nil, errors.New("lockfile has no servers array")
 	}
-	lock := &Lock{SchemaVersion: version}
 	ids := newNameSet()
 	for i, rawServer := range rawServers {
 		server, err := readLockedServer(rawServer, i, version)
@@ -285,8 +307,11 @@ func checkDigest(digest string) error {
 // beside it. A tool carrying a number the canonical form does not identify is
 // pinned as undecidable instead of being given a digest that would cover its
 // neighbours too.
-func BuildLock(manifest *Manifest) (*Lock, error) {
-	lock := &Lock{SchemaVersion: LockSchemaVersion}
+//
+// serial is the approval this lockfile is: one past whatever the lockfile it
+// replaces carried, so that a floor can be held against it.
+func BuildLock(manifest *Manifest, serial int) (*Lock, error) {
+	lock := &Lock{SchemaVersion: LockSchemaVersion, ApprovalSerial: serial}
 	for _, server := range manifest.Servers {
 		locked := LockedServer{
 			ID:              server.ID,
@@ -374,6 +399,39 @@ func (l *Lock) index() map[string]map[string]LockedTool {
 		index[server.ID] = tools
 	}
 	return index
+}
+
+// SerialFor is the approval number a lockfile should carry when it replaces
+// the one at path.
+//
+// It moves only when the approval does. Counting runs rather than approvals
+// would rewrite the file every time lock is run over an unchanged surface,
+// invalidating a good signature and putting a diff in front of a reviewer that
+// says nothing - which is how people learn to skim lockfile diffs. An
+// unreadable or absent predecessor starts the count rather than stopping the
+// write.
+func SerialFor(path string, lock *Lock) int {
+	previous, err := LoadLock(path)
+	if err != nil {
+		return 1
+	}
+	if SameApproval(previous, lock) {
+		return previous.ApprovalSerial
+	}
+	return previous.ApprovalSerial + 1
+}
+
+// SameApproval says whether two lockfiles approve the same surface, leaving
+// aside the serial that counts them.
+func SameApproval(a, b *Lock) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	left, right := *a, *b
+	left.ApprovalSerial, right.ApprovalSerial = 0, 0
+	encodedLeft, leftErr := json.Marshal(left)
+	encodedRight, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(encodedLeft, encodedRight)
 }
 
 func (l *Lock) servers() map[string]LockedServer {

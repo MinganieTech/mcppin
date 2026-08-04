@@ -49,9 +49,23 @@ speaks no MCP, and opens no connection.
    A signature says "this surface was approved by this key", and not "this is the approval in
    force". An attacker who can write the lockfile can put back an **older lockfile and its own
    valid signature** - one from before a tool was withdrawn, or before a description was
-   tightened - and every check passes. `signed_at` is in the envelope and nothing enforces it,
-   because a file cannot tell you it is the newest one; only something that remembers can. What
-   catches a rollback is the diff in the pull request that removes the newer lockfile.
+   tightened - and every check passes. No pair of files can prevent that on its own: a file cannot
+   say it is the newest one, and only something that remembers can.
+
+   Three things carry that memory, and each anchors somewhere the lockfile is not:
+
+   - `approval_serial` in the lockfile, with `verify -min-serial N`. The floor is a number you pin
+     in the pipeline configuration, which is a different place from the repository the lockfile
+     sits in. The serial counts approvals rather than runs, so re-approving an unchanged surface
+     does not move it.
+   - `verify -max-signature-age`, against the `signed_at` in the envelope. That date is trustworthy
+     here precisely because whoever replays an old lockfile does not hold the key. It bounds how
+     far back a rollback can reach without stopping one, and it makes a build depend on a clock.
+   - Version control, which is memory you already keep: a rollback is a commit that removes the
+     newer lockfile, and it is visible in review.
+
+   None of the three is automatic. A pipeline that reads its floor from the same repository an
+   attacker can write has anchored nothing.
 
    That moves the assumption rather than removing it: **the private key is now the thing that
    approves surfaces**. Whoever holds it can approve anything, and this build does not encrypt it,
@@ -85,7 +99,8 @@ speaks no MCP, and opens no connection.
 | The surface changing between the check and the call | **No** | `mcppin` runs once; it is not a proxy |
 | A tampered lockfile | Yes, if signed | `verify -pubkey` refuses anything but a valid signature by a key you named; unsigned, see assumption 2 |
 | A stolen signing key | **No** | it approves whatever it is pointed at; see assumption 2 |
-| A rollback to an older signed lockfile | **No** | the signature is still valid, and a file cannot say it is the newest one; the diff that removes the newer lockfile is what shows it |
+| A rollback to an older signed lockfile | Partly | the signature stays valid; `-min-serial` and `-max-signature-age` refuse it only if the floor or the clock is anchored outside the repository. See assumption 2 |
+| A capture of part of the surface passed off as all of it | Yes | a capture that names its `scope` has the rest reported as unexamined; one that does not is claiming to be everything, and the missing servers read as removals |
 | A truncated or partial export | **No** | see assumption 1; a short manifest looks like removals, or like nothing at all |
 
 ## Where the remaining risk goes

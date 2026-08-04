@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // keyPair generates a pair and writes it where a command line can name it.
@@ -222,6 +223,93 @@ func TestReLockingSaysTheSignatureIsStaleOnlyWhenItIs(t *testing.T) {
 	}
 	if _, err := os.Stat(SignaturePath(lock)); err != nil {
 		t.Error("and must not delete somebody else's signature")
+	}
+}
+
+// A signature says a surface was approved, never that it is the approval in
+// force. Putting back an older lockfile and its own valid signature passes
+// every check the pair can make, so the floor has to come from outside it.
+func TestAnOlderApprovalCanBePutBackUnlessAFloorIsHeld(t *testing.T) {
+	manifest := write(t, "manifest.json", capturedSurface)
+	lock := lockFor(t, manifest)
+	private, public := keyPair(t, filepath.Dir(lock))
+
+	// Approval 1: sign it, and keep the pair the way an attacker would.
+	if code, _, stderr := run(t, "sign", "-lock", lock, "-key", private); code != ExitOK {
+		t.Fatalf("sign exited %d: %s", code, stderr)
+	}
+	oldLock, err := os.ReadFile(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSignature, err := os.ReadFile(SignaturePath(lock))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Approval 2 tightens the surface, and is signed in its turn.
+	tightened := write(t, "tightened.json", strings.Replace(capturedSurface,
+		"Refund a charge that has already settled.", "Refund a settled charge, up to 100.", 1))
+	if code, _, stderr := run(t, "lock", "-o", lock, tightened); code != ExitOK {
+		t.Fatalf("lock exited %d: %s", code, stderr)
+	}
+	if code, _, stderr := run(t, "sign", "-lock", lock, "-key", private); code != ExitOK {
+		t.Fatalf("sign exited %d: %s", code, stderr)
+	}
+	current, err := LoadLock(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ApprovalSerial != 2 {
+		t.Fatalf("the second approval should count 2, got %d", current.ApprovalSerial)
+	}
+
+	// The rollback: both files replaced by the pair kept above.
+	if err := os.WriteFile(lock, oldLock, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(SignaturePath(lock), oldSignature, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := run(t, "verify", "-lock", lock, "-pubkey", public, manifest); code != ExitOK {
+		t.Fatalf("the old pair is internally consistent, so it passes; exited %d", code)
+	}
+
+	// Unless the run is told what it has already seen.
+	code, _, stderr := run(t, "verify", "-lock", lock, "-pubkey", public, "-min-serial", "2", manifest)
+	if code != ExitUnreadable {
+		t.Fatalf("a floor should refuse approval 1, exited %d", code)
+	}
+	if !strings.Contains(stderr, "approval 1") {
+		t.Errorf("the refusal should say which approval it got: %s", stderr)
+	}
+}
+
+func TestAStaleSignatureCanBeRefused(t *testing.T) {
+	lock, public := signedLock(t)
+	manifest := filepath.Join(filepath.Dir(lock), "manifest.json")
+
+	if code, _, stderr := run(t, "verify", "-lock", lock, "-pubkey", public,
+		"-max-signature-age", "24h", manifest); code != ExitOK {
+		t.Fatalf("a signature made just now is not stale, exited %d: %s", code, stderr)
+	}
+
+	previous := now
+	now = func() time.Time { return previous().Add(48 * time.Hour) }
+	defer func() { now = previous }()
+
+	code, _, stderr := run(t, "verify", "-lock", lock, "-pubkey", public,
+		"-max-signature-age", "24h", manifest)
+	if code != ExitUnreadable {
+		t.Fatalf("a signature two days old is, exited %d", code)
+	}
+	if !strings.Contains(stderr, "accepts nothing older") {
+		t.Errorf("the refusal should say what the limit was: %s", stderr)
+	}
+
+	// Asking how old a signature is means checking it.
+	if code, _, _ := run(t, "verify", "-lock", lock, "-max-signature-age", "24h", manifest); code != ExitUsage {
+		t.Errorf("-max-signature-age without -pubkey exited %d", code)
 	}
 }
 

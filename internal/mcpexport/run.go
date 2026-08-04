@@ -49,12 +49,16 @@ const (
 const maxServerLogLines = 40
 
 type manifestDocument struct {
-	SchemaVersion   int              `json:"schema_version"`
-	ProtocolVersion string           `json:"protocol_version"`
-	Complete        bool             `json:"complete"`
-	CapturedAt      string           `json:"captured_at"`
-	CapturedBy      string           `json:"captured_by"`
-	Servers         []serverDocument `json:"servers"`
+	SchemaVersion   int    `json:"schema_version"`
+	ProtocolVersion string `json:"protocol_version"`
+	Complete        bool   `json:"complete"`
+	// Scope is written only when this capture was asked for part of the
+	// configuration. Its absence is the claim that this is the whole surface,
+	// so it is never written out of habit.
+	Scope      []string         `json:"scope,omitempty"`
+	CapturedAt string           `json:"captured_at"`
+	CapturedBy string           `json:"captured_by"`
+	Servers    []serverDocument `json:"servers"`
 }
 
 type serverDocument struct {
@@ -131,11 +135,12 @@ func Main(args []string, stdout, stderr io.Writer) int {
 				*configPath, mcppin.Printable(*only))
 			return exitUsage
 		}
-		// The manifest that comes out covers one server. Verified against a
-		// lockfile that covers more, every other approved tool reads as
-		// removed - loudly, but for the wrong reason.
-		fmt.Fprintf(stderr, "warning: this manifest covers %s alone; verify it against a lockfile "+
-			"of the same scope\n", mcppin.Printable(*only))
+		// The manifest says so, rather than looking like a capture of
+		// everything that happens to be short. Verified against a lockfile
+		// covering more, the rest is reported as unexamined instead of
+		// withdrawn.
+		fmt.Fprintf(stderr, "mcppin-export: this capture covers %s alone, and says so in its scope\n",
+			mcppin.Printable(*only))
 	}
 
 	document := manifestDocument{
@@ -144,6 +149,9 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		Complete:        true,
 		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
 		CapturedBy:      "mcppin-export/" + mcppin.Version,
+	}
+	if *only != "" {
+		document.Scope = []string{*only}
 	}
 	for _, server := range servers {
 		fmt.Fprintf(stderr, "mcppin-export: capturing %s over the %s wire\n", server.ID, era)

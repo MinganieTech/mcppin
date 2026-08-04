@@ -44,10 +44,17 @@ type Manifest struct {
 	// Complete says whether the capture holds every tool the servers offered,
 	// as one surface. A capture that stopped early, or whose passes disagreed,
 	// cannot support any statement about absence.
-	Complete   bool
-	CapturedAt string
-	CapturedBy string
-	Servers    []Server
+	Complete bool
+	// Scope names the servers this capture claims to cover, and is empty when
+	// the capture claims to be the whole surface an agent sees. The difference
+	// is not decoration: a capture of one server, compared against a lockfile
+	// covering three, would otherwise report every tool of the other two as
+	// withdrawn - loudly, and for the wrong reason.
+	Scope       []string
+	ScopeStated bool
+	CapturedAt  string
+	CapturedBy  string
+	Servers     []Server
 }
 
 // LoadManifest reads a manifest from a file.
@@ -119,7 +126,55 @@ func ReadManifest(r io.Reader) (*Manifest, error) {
 	if len(manifest.Servers) == 0 {
 		return nil, errors.New("the manifest declares no server")
 	}
+	if err := readScope(object, manifest); err != nil {
+		return nil, err
+	}
 	return manifest, nil
+}
+
+// readScope reads what a capture claims to cover, and refuses a claim that
+// does not match what it carries. A manifest holding a server it does not
+// claim, or claiming one it does not hold, describes a capture nobody can
+// reason about: the two readings differ on whether a missing tool was
+// withdrawn or never looked for.
+func readScope(object map[string]any, manifest *Manifest) error {
+	raw, present := object["scope"]
+	if !present {
+		return nil
+	}
+	claimed, ok := raw.([]any)
+	if !ok || len(claimed) == 0 {
+		return errors.New("scope is empty or not an array; leave it out to claim the whole surface")
+	}
+
+	names := newNameSet()
+	for _, entry := range claimed {
+		id, ok := entry.(string)
+		if !ok || id == "" {
+			return errors.New("a scope entry is not a server id")
+		}
+		if other, ok := names.add(id); !ok {
+			return fmt.Errorf("the scope names %q twice", other)
+		}
+		manifest.Scope = append(manifest.Scope, id)
+	}
+	manifest.ScopeStated = true
+
+	carried := make(map[string]bool, len(manifest.Servers))
+	for _, server := range manifest.Servers {
+		carried[server.ID] = true
+	}
+	for _, id := range manifest.Scope {
+		if !carried[id] {
+			return fmt.Errorf("the scope names %q, which this manifest does not carry", id)
+		}
+	}
+	for _, server := range manifest.Servers {
+		if !contains(manifest.Scope, server.ID) {
+			return fmt.Errorf("the manifest carries %q, which its scope does not name", server.ID)
+		}
+	}
+	return nil
 }
 
 // readCapture reads what a version 2 manifest says about its own capture. It

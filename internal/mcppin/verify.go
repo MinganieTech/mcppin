@@ -108,6 +108,10 @@ type Result struct {
 	// hid that behind a clean exit would be reassuring about a surface it had
 	// only partly seen.
 	CaptureComplete bool `json:"capture_complete"`
+	// Unexamined lists the approved servers this capture did not claim to
+	// cover. They were not compared, and saying nothing about them would read
+	// as saying they were fine.
+	Unexamined []string `json:"unexamined_servers"`
 	// SignedBy is the fingerprint of the trusted key that vouches for the
 	// lockfile, empty when the run was not told to ask. It is reported rather
 	// than assumed: "the lockfile was signed" and "the signature was checked
@@ -135,6 +139,7 @@ func (r Result) FindingsFor(policy string) []Finding {
 func Inspect(manifest *Manifest) Result {
 	result := Result{
 		CaptureComplete: manifest.Complete,
+		Unexamined:      []string{},
 		Findings:        []Finding{},
 		Unstable:        []UnstableTool{},
 		Unseen:          []UnseenTool{},
@@ -220,6 +225,12 @@ func Verify(manifest *Manifest, lock *Lock) (Result, error) {
 	result.Findings = append(result.Findings, changedServers(manifest, lock)...)
 
 	for _, server := range sortedKeys(approved) {
+		// A capture that named its scope was not asked about the rest, so the
+		// rest is reported as unexamined rather than compared against nothing.
+		if manifest.ScopeStated && !contains(manifest.Scope, server) {
+			result.Unexamined = append(result.Unexamined, server)
+			continue
+		}
 		for _, tool := range sortedKeys(approved[server]) {
 			was := approved[server][tool]
 			now, offered := current[server][tool]

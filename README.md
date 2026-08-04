@@ -233,6 +233,12 @@ one that survived a check.
 A capture that says it is not complete **cannot prove that a tool was withdrawn**: those tools are
 reported as unseen, the run exits `3`, and `tool-removed` is summarised as `PARTIAL`.
 
+`scope`, when present, names the servers this capture claims to cover, and its absence is the claim
+that this is the whole surface an agent sees. It has to match what the manifest carries exactly.
+A scoped capture verified against a lockfile covering more reports the rest as **unexamined** and
+exits `3`, instead of announcing that every tool of every other server was withdrawn -
+`mcppin-export -server billing` writes it for you.
+
 Version 1 manifests are refused. They had no way to state completeness, so reading one would mean
 deciding on its behalf that it was complete, and a removal "proven" against a capture of unknown
 coverage is not proven. A manifest costs nothing to produce again: capture the surface once more.
@@ -301,6 +307,35 @@ the approval, is refused rather than half-believed:
 
 What is signed is the **canonical form** of the lockfile, so re-indenting it does not break the
 signature and changing a digest, a name or an approved description does.
+
+### What a signature does not do
+
+A signature says a surface **was approved by this key**. It does not say it is the approval in
+force. Somebody who can write the lockfile can put back an older one together with its own valid
+signature - from before a tool was withdrawn, or before a description was tightened - and every
+check passes. Nothing inside a pair of files can prevent that: a file cannot say it is the newest
+one. Freshness needs memory somewhere else.
+
+Two things carry that memory, and both anchor outside the files:
+
+```bash
+mcppin verify -lock mcp.lock.json -pubkey k.pub -min-serial 7 manifest.json
+mcppin verify -lock mcp.lock.json -pubkey k.pub -max-signature-age 720h manifest.json
+```
+
+`approval_serial` is in the lockfile and counts approvals, not runs: `lock` leaves it alone when
+the surface has not moved, so re-approving an unchanged surface produces the same bytes and keeps
+its signature. `-min-serial` refuses anything below a floor **you pin in the pipeline**, which is
+the part an attacker with write access to the repository does not necessarily reach.
+
+`-max-signature-age` refuses a signature older than a duration, using the `signed_at` the envelope
+carries. That date is worth trusting in exactly this case: whoever replays an old lockfile does not
+hold the key, so they cannot move it. It bounds how far back a rollback can reach; it does not stop
+one, and it makes a build fail on a clock rather than on a change, so it wants a duration you are
+willing to be woken for.
+
+The third answer is the one you already have: the lockfile is in version control, and the diff that
+removes the newer one is what a reviewer sees.
 
 - `-pubkey` is repeatable, for rotation. It is the trust anchor: a signature by any other key is
   refused however valid it is.
