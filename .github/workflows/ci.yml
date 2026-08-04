@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # So the matrix can be run against a branch on demand, without opening a
+  # pull request to find out whether it passes on the two platforms a
+  # development machine is not.
+  workflow_dispatch:
 
 permissions:
   contents: read
