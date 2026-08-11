@@ -88,14 +88,32 @@ var ruleDescriptions = map[string]string{
 	PolicyMixedScriptName:  "A tool name draws on several writing systems, which is how one name is made to look like another.",
 	PolicyInvalidToolName:  "A tool name carries characters outside A-Za-z0-9._- .",
 	PolicyServerRenamed:    "A server no longer calls itself what it called itself when it was approved.",
+	PolicyProtocolChanged:  "A server negotiated a different protocol revision than the one the surface was approved over.",
 	ruleUndecidableDigest:  "A tool carries a number the canonical form does not identify, so it has no digest worth comparing.",
 	ruleIncompleteCapture:  "The capture says it does not hold every tool, so absence proves nothing.",
 	ruleUnexaminedServer:   "An approved server was outside what this capture claims to cover, and was not compared.",
 }
 
-// WriteSARIF emits the run as SARIF 2.1.0. A gated policy is an error and
-// anything else is a warning: the severity has to agree with the exit code, or
-// a dashboard and a pipeline will disagree about the same run.
+// undecidable names the rules that are not policies. They are never gated and
+// they always fail the run, with exit 3, so they are errors: a dashboard that
+// showed them as warnings would disagree with the pipeline about the same run.
+var undecidable = map[string]bool{
+	ruleUndecidableDigest: true,
+	ruleIncompleteCapture: true,
+	ruleUnexaminedServer:  true,
+}
+
+// severityOf keeps SARIF and the exit code telling the same story.
+func severityOf(rule string, gated map[string]bool) string {
+	if gated[rule] || undecidable[rule] {
+		return "error"
+	}
+	return "warning"
+}
+
+// WriteSARIF emits the run as SARIF 2.1.0. What fails the run is an error and
+// what is only reported is a warning: the severity has to agree with the exit
+// code, or a dashboard and a pipeline will disagree about the same run.
 func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) error {
 	gated := make(map[string]bool, len(gate))
 	for _, policy := range gate {
@@ -104,16 +122,18 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 
 	rules := make([]sarifRule, 0, len(ruleDescriptions))
 	for _, id := range append(Policies(), ruleUndecidableDigest, ruleIncompleteCapture, ruleUnexaminedServer) {
-		level := "warning"
-		if gated[id] {
-			level = "error"
+		description, described := ruleDescriptions[id]
+		if !described {
+			// A rule with no description is a rule somebody added in one place
+			// and not the other, and it reaches a dashboard as a blank line.
+			description = "This build declares " + id + " and has no description for it, which is a bug in mcppin."
 		}
 		rules = append(rules, sarifRule{
 			ID:                   id,
 			Name:                 id,
-			ShortDescription:     sarifText{Text: ruleDescriptions[id]},
-			FullDescription:      sarifText{Text: ruleDescriptions[id]},
-			DefaultConfiguration: sarifConfiguration{Level: level},
+			ShortDescription:     sarifText{Text: description},
+			FullDescription:      sarifText{Text: description},
+			DefaultConfiguration: sarifConfiguration{Level: severityOf(id, gated)},
 		})
 	}
 
@@ -122,13 +142,9 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 	}}}
 	results := make([]sarifResult, 0, len(result.Findings)+len(result.Unstable)+1)
 	for _, finding := range result.Findings {
-		level := "warning"
-		if gated[finding.Policy] {
-			level = "error"
-		}
 		results = append(results, sarifResult{
 			RuleID:    finding.Policy,
-			Level:     level,
+			Level:     severityOf(finding.Policy, gated),
 			Message:   sarifText{Text: sarifMessage(finding)},
 			Locations: location,
 			PartialFingerprints: map[string]string{
@@ -139,7 +155,7 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 	for _, unstable := range result.Unstable {
 		results = append(results, sarifResult{
 			RuleID: ruleUndecidableDigest,
-			Level:  "warning",
+			Level:  severityOf(ruleUndecidableDigest, gated),
 			Message: sarifText{Text: fmt.Sprintf("%s %s carries %s (%s), which the canonical form does not identify",
 				Printable(unstable.Server), Printable(unstable.Tool),
 				Printable(strings.Join(unstable.Literals, ", ")), unstable.Where)},
@@ -152,7 +168,7 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 	for _, server := range result.Unexamined {
 		results = append(results, sarifResult{
 			RuleID: ruleUnexaminedServer,
-			Level:  "warning",
+			Level:  severityOf(ruleUnexaminedServer, gated),
 			Message: sarifText{Text: fmt.Sprintf(
 				"%s was approved and this capture did not claim to cover it", Printable(server))},
 			Locations: location,
@@ -169,7 +185,7 @@ func WriteSARIF(w io.Writer, result Result, gate []string, manifestPath string) 
 		}
 		results = append(results, sarifResult{
 			RuleID:              ruleIncompleteCapture,
-			Level:               "warning",
+			Level:               severityOf(ruleIncompleteCapture, gated),
 			Message:             sarifText{Text: message},
 			Locations:           location,
 			PartialFingerprints: map[string]string{"mcppin/v1": fingerprint(ruleIncompleteCapture, "", "")},

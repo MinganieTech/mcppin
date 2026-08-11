@@ -3,6 +3,53 @@
 Below 1.0 the formats are still moving. Each of them carries its own schema version, and a build
 says which ones it reads. The exit codes are the part that will not move quietly.
 
+## 0.2.1
+
+### The guarantee said more than the default gate did
+
+The threat model promised that no string carries a character that occupies no visible space, while
+`hidden-characters` was not in the default gate. A surface approved with a `U+200B` in it therefore
+printed `VIOLATION hidden-characters` and exited `0`.
+
+The split is kept and the claim is corrected, because gating those policies by default would fail
+every run of a surface nobody had changed: what the default gate answers for is **drift**, and the
+properties of the surface itself are reported and become gates with `-fail-on all`.
+
+The report no longer leaves that to be inferred. A run that found something it did not answer for
+now says so:
+
+```
+NOT GATED: hidden-characters
+  reported above and not answered for by the exit code. These describe the
+  surface rather than a departure from the approved one, so a surface can be
+  approved with them already in it. -fail-on all makes them fail the run.
+```
+
+### Fixed
+
+- `protocol-changed` had no SARIF description, so its rule reached a dashboard blank. Every rule is
+  now checked to have one, and a rule declared without a description says so loudly instead of
+  quietly.
+- An undecidable digest, an incomplete capture and an unexamined server exit `3` and were SARIF
+  warnings. They are errors: the severity has to agree with the exit code.
+
+### Added
+
+- **Install instructions**: release binaries for Linux, macOS and Windows with checksum
+  verification, `go install`, and a complete GitHub Actions workflow that captures a surface,
+  gates on it and uploads the findings to code scanning.
+- **Build provenance attestation** on every release artefact, verifiable with
+  `gh attestation verify <file> --repo MinganieTech/mcppin`. A checksum published beside the file
+  it covers, by the job that made both, says only that the download is not corrupt.
+- A release now **refuses to publish a commit that did not pass CI** - all six checks, including
+  the race detector, the fuzzing and `govulncheck` - rather than trusting that it compiles.
+
+### Changed
+
+- The rule for adding a field to a format is written down: informational fields are free, and a
+  field a correct reader must act on bumps the schema version. An older build ignores what it does
+  not know, which is fine for provenance and unacceptable for a decision.
+
 ## 0.2.0
 
 First release. Version 0.1.0 was never tagged; it is listed below as what the repository held

@@ -39,10 +39,20 @@ must not also be the thing an untrusted server gets to answer. `internal/mcppin`
   on its way to a terminal - descriptions, names, its error messages, its standard error. A `%s`
   straight from a manifest is a bug. The `json` report is the one output that carries values as
   they were served.
-- **Formats are contracts.** Adding a field is free; removing one or changing what it means bumps
-  `ManifestSchemaVersion`, `LockSchemaVersion` or `ReportSchemaVersion`. Every lockfile version
-  this project has written stays readable, because the upgrade path must never be "re-approve a
-  surface you have not compared".
+- **Formats are contracts, and "adding a field is free" has a limit.** An older build ignores a
+  field it does not know. That is harmless for provenance and unacceptable for a decision, because
+  a lockfile carrying `expires_at` or `policy` would be *silently disregarded* by every build
+  released before it - the reader would pass a surface the file said to refuse. So:
+
+  | New field | What it takes |
+  |---|---|
+  | Informational: provenance, timestamps, counts, anything a reader may ignore without being wrong | Add it. No version bump. |
+  | Load-bearing: anything a correct reader **must** act on to reach the right verdict | Bump `ManifestSchemaVersion`, `LockSchemaVersion` or `ReportSchemaVersion`, so an older build refuses the file instead of half-reading it |
+
+  Removing a field, or changing what one means, always bumps. Every lockfile version this project
+  has written stays readable, because the upgrade path must never be "re-approve a surface you have
+  not compared". The signature envelope is stricter still and refuses any member it does not know:
+  what is not read there is not signed, so there is no such thing as an informational field in it.
 - **The threat model comes first.** A change that widens what the tool covers updates
   [docs/threat-model.md](docs/threat-model.md) in the same pull request. Any wording that lets a
   reader hear "this server is safe" is a bug.

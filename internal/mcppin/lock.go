@@ -16,6 +16,15 @@ import (
 // still read so an existing baseline can be verified before it is rewritten:
 // re-approving a surface you have not compared would approve whatever drifted
 // into it.
+//
+// A member this build does not know is ignored, and that is only safe for a
+// member a correct reader may ignore - provenance, a count, a timestamp. A
+// field that has to be acted on to reach the right verdict cannot be added
+// under this version: an older build would pass a surface the file said to
+// refuse, having never seen the instruction. Such a field bumps the version,
+// so an older build refuses the file rather than half-reading it. The
+// signature envelope, where nothing is informational, refuses unknown members
+// outright.
 const LockSchemaVersion = 2
 
 // digestAlgorithm prefixes every digest so a second algorithm can be added

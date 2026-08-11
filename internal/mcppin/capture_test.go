@@ -385,6 +385,22 @@ func TestSarifCarriesTheRunAndItsSeverities(t *testing.T) {
 	}
 	// Every policy, plus the three statements that are not policies: a digest
 	// that could not be compared, a partial capture, an unexamined server.
+	// Every rule carries a description. A rule declared in one place and not
+	// the other reaches a dashboard as a blank line.
+	for _, rule := range log.Runs[0].Tool.Driver.Rules {
+		if ruleDescriptions[rule.ID] == "" {
+			t.Errorf("the rule %s has no description", rule.ID)
+		}
+	}
+	// What fails the run is an error; what is only reported is a warning.
+	for _, id := range []string{ruleUndecidableDigest, ruleIncompleteCapture, ruleUnexaminedServer} {
+		if severityOf(id, map[string]bool{}) != "error" {
+			t.Errorf("%s exits 3 and must not be a warning", id)
+		}
+	}
+	if severityOf(PolicyHiddenCharacters, map[string]bool{}) != "warning" {
+		t.Error("an ungated policy is a warning")
+	}
 	if len(log.Runs[0].Tool.Driver.Rules) != len(Policies())+3 {
 		t.Errorf("every rule should be declared: %+v", log.Runs[0].Tool.Driver.Rules)
 	}

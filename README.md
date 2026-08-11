@@ -10,9 +10,15 @@ its tool claims to do. `mcppin` is `package-lock.json` for that surface.
 It is deliberately not a detector. It does not judge what a description *says* - no classifier, no
 scoring, no reading of intent. A description that asks an agent to do something outrageous in
 plain ASCII is a review problem, and pretending to solve it would be the fifth implementation of
-something already bypassable. What `mcppin` proves is that every tool being served **canonicalises
-to the same bytes as the tool that was approved**, and that no character in it is hiding from the
-reviewer.
+something already bypassable.
+
+What `mcppin` answers for by default is **drift**: every tool being served canonicalises to the
+same bytes as the tool that was approved, none was added or removed, and no server renamed itself.
+Properties of the surface itself - an invisible character, two servers offering one name, a name
+outside the portable set - are **always reported and become gates with `-fail-on all`**. They are
+not in the default gate because a surface can be approved with them already in it: that is a review
+failure, not a departure, and failing every run over something nobody changed is how a gate gets
+switched off.
 
 What it does not prove is in [the threat model](docs/threat-model.md), and reading it before
 relying on this in a pipeline is the point of it being written down.
@@ -33,6 +39,97 @@ relying on this in a pipeline is the point of it being written down.
 They are separate on purpose. The thing that decides whether a surface is approved should not also
 be the thing an untrusted server gets to answer. Use `mcppin-export` if it fits, export the
 manifest from your own gateway if it does not; `mcppin` never knows the difference.
+
+## Install
+
+Binaries for Linux, macOS and Windows, on amd64 and arm64, are attached to
+[the latest release](https://github.com/MinganieTech/mcppin/releases/latest), with a `SHA256SUMS`
+beside them. A tool that exists to tell you what to trust should be checked before it is run:
+
+```bash
+VERSION=v0.2.0 OS=linux ARCH=amd64          # or OS=darwin, ARCH=arm64
+BASE=https://github.com/MinganieTech/mcppin/releases/download/${VERSION}
+curl -sSLO ${BASE}/mcppin_${VERSION}_${OS}_${ARCH}.tar.gz
+curl -sSLO ${BASE}/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS     # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
+tar -xzf mcppin_${VERSION}_${OS}_${ARCH}.tar.gz
+sudo install mcppin_${VERSION}_${OS}_${ARCH}/mcppin \
+             mcppin_${VERSION}_${OS}_${ARCH}/mcppin-export /usr/local/bin/
+```
+
+A checksum published next to the file it covers, by the job that made both, only says the download
+is not corrupt. What says where the bytes came from is the build provenance attestation, signed and
+recorded in a public transparency log:
+
+```bash
+gh attestation verify mcppin_${VERSION}_${OS}_${ARCH}.tar.gz --repo MinganieTech/mcppin
+```
+
+On Windows, keeping the downloaded name is what lets the checksum be checked at all:
+
+```powershell
+$v = "v0.2.0"; $base = "https://github.com/MinganieTech/mcppin/releases/download/$v"
+Invoke-WebRequest "$base/mcppin_${v}_windows_amd64.zip" -OutFile "mcppin_${v}_windows_amd64.zip"
+Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
+(Get-FileHash "mcppin_${v}_windows_amd64.zip" -Algorithm SHA256).Hash.ToLower()
+Select-String SHA256SUMS -Pattern windows_amd64   # the two must match
+Expand-Archive "mcppin_${v}_windows_amd64.zip"
+```
+
+With a Go toolchain, either binary can be installed from source:
+
+```bash
+go install github.com/MinganieTech/mcppin/cmd/mcppin@v0.2.0
+go install github.com/MinganieTech/mcppin/cmd/mcppin-export@v0.2.0
+```
+
+Or from a clone: `go build ./...`.
+
+### In GitHub Actions
+
+The surface is captured, then held to the lockfile in the repository. The findings go to code
+scanning whether the gate passed or not, and the job fails on the exit code:
+
+```yaml
+name: mcp surface
+on: [push, pull_request]
+
+permissions:
+  contents: read
+  security-events: write     # to upload the SARIF
+
+jobs:
+  surface:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4        # pin by SHA in your own repository
+
+      - name: install mcppin, and check what was downloaded
+        run: |
+          VERSION=v0.2.0
+          BASE=https://github.com/MinganieTech/mcppin/releases/download/${VERSION}
+          curl -sSLO ${BASE}/mcppin_${VERSION}_linux_amd64.tar.gz
+          curl -sSLO ${BASE}/SHA256SUMS
+          sha256sum --ignore-missing -c SHA256SUMS
+          tar -xzf mcppin_${VERSION}_linux_amd64.tar.gz
+          sudo install mcppin_${VERSION}_linux_amd64/mcppin* /usr/local/bin/
+
+      - name: capture the surface
+        run: mcppin-export -config .mcp.json -o manifest.json
+
+      - name: hold it to what was approved
+        run: mcppin verify -lock mcp.lock.json -fail-on all -format sarif manifest.json > mcppin.sarif
+
+      - name: report the findings either way
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: mcppin.sarif
+```
+
+Add `-pubkey mcppin.pub` once the lockfile is signed, and `-min-serial N` once you have a floor to
+hold - see [Signing](#signing). `-fail-on all` is what makes the surface's own properties, and not
+only its drift, fail the run.
 
 ## Usage
 
@@ -102,11 +199,21 @@ never has to re-derive the rule and disagree with the process about it.
 | `invalid-tool-name` | a tool name carries characters outside `A-Za-z0-9._-` |
 | `protocol-changed` | a server negotiates a different protocol revision than the one it was approved over |
 
-The first four are the default gate. `protocol-changed` is reported and not gated by default: the
-revision depends on what the exporter asked for as much as on the server, so a changed flag would
-otherwise read as drift. The rest describe the manifest rather than a departure from
-the approved surface - a surface can be approved with a name collision already in it - so they are
-reported always and gated on request.
+The first four are the default gate - they are the ones that mean the surface **moved**. The rest
+describe what the surface *is*, so a surface can be approved with them already in it; they are
+always reported and gated with `-fail-on all`. (`protocol-changed` is out of the default gate for a
+second reason: the revision depends on what the exporter asked for as much as on the server, so a
+changed flag would otherwise read as drift.)
+
+When a run reports a finding it did not answer for, it says so rather than leaving a `VIOLATION`
+line above four `PASS` lines and an exit `0`:
+
+```
+NOT GATED: hidden-characters
+  reported above and not answered for by the exit code. These describe the
+  surface rather than a departure from the approved one, so a surface can be
+  approved with them already in it. -fail-on all makes them fail the run.
+```
 
 `hidden-characters` searches **every** string in the tool object and says where it found one, as a
 JSON pointer: a description three levels down an input schema reaches the model exactly like the

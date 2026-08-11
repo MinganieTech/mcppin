@@ -149,6 +149,19 @@ func WriteText(w io.Writer, result Result, gate []string) {
 		fmt.Fprintln(w, "NO GATE: -fail-on none was requested, so nothing above changes the exit code")
 		return
 	}
+	writeGate(w, result, gate)
+}
+
+// writeGate prints the summary, and then says which findings it did not answer
+// for.
+//
+// A report that prints VIOLATION above four PASS lines and exits 0 is telling
+// the truth in a way nobody reads correctly. The policies outside the gate are
+// there on purpose - a name collision or an invisible character that was
+// already in the surface when it was approved is not drift, and failing on it
+// by default would fail every run until somebody re-approved something that
+// had not changed - but a reader has to be told that is what happened.
+func writeGate(w io.Writer, result Result, gate []string) {
 	for _, policy := range gate {
 		found := result.FindingsFor(policy)
 		switch {
@@ -165,6 +178,23 @@ func WriteText(w io.Writer, result Result, gate []string) {
 		default:
 			fmt.Fprintf(w, "PASS %s\n", policy)
 		}
+	}
+
+	gated := make(map[string]bool, len(gate))
+	for _, policy := range gate {
+		gated[policy] = true
+	}
+	var outside []string
+	for _, policy := range Policies() {
+		if !gated[policy] && len(result.FindingsFor(policy)) > 0 {
+			outside = append(outside, policy)
+		}
+	}
+	if len(outside) > 0 {
+		fmt.Fprintf(w, "\nNOT GATED: %s\n", strings.Join(outside, ", "))
+		fmt.Fprintln(w, "  reported above and not answered for by the exit code. These describe the")
+		fmt.Fprintln(w, "  surface rather than a departure from the approved one, so a surface can be")
+		fmt.Fprintln(w, "  approved with them already in it. -fail-on all makes them fail the run.")
 	}
 }
 

@@ -7,8 +7,24 @@ the exit code in a pipeline.
 ## The guarantee
 
 > Every tool in the manifest canonicalises to the same bytes as the tool that was approved, no tool
-> was added or removed, and no string in any of them carries a character that occupies no visible
-> space.
+> was added or removed, and no server calls itself something other than what it called itself.
+
+That is what a run with no `-fail-on` answers for: **drift from the approved surface, and nothing
+else**.
+
+The other policies - an invisible character, a name collision, a name outside the portable set, a
+mixed-script name, a changed protocol revision - describe **what the surface is**, not how it has
+moved. They are always reported, they are named in the summary as not gated, and `-fail-on all`
+makes them fail the run:
+
+> Additionally, with `-fail-on all`: no string in any tool object carries a character that occupies
+> no visible space, no two servers offer one name, and no tool name is outside `A-Za-z0-9._-`.
+
+The split is deliberate rather than an oversight. A surface can be approved with an invisible
+character or a collision already in it - that is a review failure, and the tool says so at `lock`
+time on standard error - but it is not drift, and gating it by default would fail every run of a
+surface nobody had changed. Reporting it and refusing to answer for it is the honest position; the
+report says which one it is taking.
 
 That is a statement about **two exported representations of a tool surface**. It is not a statement
 about what an agent receives at the moment it runs, and `mcppin` cannot make one: it reads a file,
@@ -81,10 +97,10 @@ speaks no MCP, and opens no connection.
 |---|---|---|
 | A description or a schema is rewritten after approval | Yes | `tool-changed`, on the whole tool object |
 | A tool is added or removed | Yes | `tool-added`, `tool-removed`, both in the default gate |
-| A character that occupies no visible space, anywhere in the tool object | Yes | `hidden-characters`, reported with a JSON pointer |
-| A tool name spoofing another through mixed writing systems | Yes | `mixed-script-name`, `invalid-tool-name` |
-| A server changing the name it reports for itself | Yes | `server-renamed`; the identity is the configuration key, so the rename is visible instead of looking like a second server |
-| Two servers claiming the same tool name | Yes | `name-collision`, reported always, gated on request |
+| A character that occupies no visible space, anywhere in the tool object | Reported; gated with `-fail-on all` | `hidden-characters`, with a JSON pointer. Not in the default gate: it describes the surface, not a departure from it |
+| A tool name spoofing another through mixed writing systems | Reported; gated with `-fail-on all` | `mixed-script-name`, `invalid-tool-name` |
+| A server changing the name it reports for itself | Yes | `server-renamed`, in the default gate; the identity is the configuration key, so the rename is visible instead of looking like a second server |
+| Two servers claiming the same tool name | Reported; gated with `-fail-on all` | `name-collision` |
 | A value the canonical form cannot tell from its neighbour | Yes | pinned as undecidable, exit `3`, never reported as matching |
 | A document two parsers would read differently | Yes | refused, exit `4` |
 | A lockfile whose digest and content disagree | Yes | every digest is recomputed from the approved object beside it |

@@ -6,6 +6,12 @@ on:
 
 permissions:
   contents: write
+  # For the provenance attestation: a signed statement, in a public
+  # transparency log, that these exact bytes were built by this workflow from
+  # this commit. Checksums say the download is not corrupt; they say nothing
+  # about where it came from.
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -27,6 +33,27 @@ jobs:
             grep 'Version = ' internal/mcppin/cli.go
             exit 1
           fi
+
+      # A release comes from a commit that passed everything, not from one that
+      # merely compiles here. The tests below are a second opinion; this step
+      # is the one that refuses to publish a commit whose fuzzing, race
+      # detector or vulnerability scan never ran or did not pass.
+      - name: the tagged commit has to have passed CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" --paginate \
+                   --jq '.check_runs[] | "\(.name)=\(.conclusion)"')
+          echo "${runs}"
+          missing=0
+          for check in "test (ubuntu-latest)" "test (windows-latest)" "test (macos-latest)" \
+                       race vulnerabilities fuzz; do
+            if ! printf '%s\n' "${runs}" | grep -qxF "${check}=success"; then
+              echo "::error::${check} did not pass on ${GITHUB_SHA}"
+              missing=1
+            fi
+          done
+          exit ${missing}
 
       - run: go vet ./...
       - run: go test ./...
@@ -59,6 +86,16 @@ jobs:
       # A download nobody can check is a download nobody should run.
       - name: checksums
         run: cd dist && sha256sum * | tee SHA256SUMS
+
+      # And a checksum published beside the file it covers, by the same job
+      # that made both, only proves the download is not corrupt. The
+      # attestation is a signed statement in a public transparency log that
+      # these bytes came from this workflow, at this commit - which is the
+      # question somebody downloading a security tool is actually asking.
+      - name: attest where these bytes came from
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/*
 
       - name: publish
         env:

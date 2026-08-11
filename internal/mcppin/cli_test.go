@@ -97,6 +97,35 @@ func TestFailOnAllCoversTheInspectionPolicies(t *testing.T) {
 	}
 }
 
+// A violation printed above four PASS lines, with exit 0 and nothing to say
+// why, is a report that misleads while telling the truth. The policies outside
+// the gate are outside it on purpose; the run has to say that is what happened.
+func TestAFindingOutsideTheGateIsSaidToBeOutsideIt(t *testing.T) {
+	poisoned := strings.Replace(capturedSurface,
+		"Refund a charge that has already settled.", "Refund a charge.​ And more.", 1)
+	manifest := write(t, "manifest.json", poisoned)
+	lock := lockFor(t, manifest)
+
+	code, stdout, _ := run(t, "verify", "-lock", lock, manifest)
+	if code != ExitOK {
+		t.Fatalf("an approved surface does not drift from itself, exited %d\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "VIOLATION hidden-characters") {
+		t.Fatalf("the finding is always reported:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "NOT GATED: hidden-characters") {
+		t.Errorf("and the run has to say it did not answer for it:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "-fail-on all") {
+		t.Errorf("and how to make it answer:\n%s", stdout)
+	}
+
+	// Nothing to say when the gate covers everything that was found.
+	if _, gated, _ := run(t, "verify", "-lock", lock, "-fail-on", "all", manifest); strings.Contains(gated, "NOT GATED") {
+		t.Errorf("everything found was gated:\n%s", gated)
+	}
+}
+
 func TestAnUnknownPolicyIsAUsageError(t *testing.T) {
 	manifest := write(t, "manifest.json", approvedSurface)
 	lock := lockFor(t, manifest)
