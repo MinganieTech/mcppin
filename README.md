@@ -23,7 +23,7 @@ switched off.
 What it does not prove is in [the threat model](docs/threat-model.md), and reading it before
 relying on this in a pipeline is the point of it being written down.
 
-> **Status: 0.2.0, experimental.** The checks are tested and the exit codes are a contract worth
+> **Status: 0.2.1, experimental.** The checks are tested and the exit codes are a contract worth
 > branching on. The formats are not settled: the manifest, the lockfile and the JSON report each
 > carry a schema version, and those may move before 1.0. Every lockfile version this project has
 > written stays readable, because the upgrade path must never be "re-approve a surface you have not
@@ -47,7 +47,7 @@ Binaries for Linux, macOS and Windows, on amd64 and arm64, are attached to
 beside them. A tool that exists to tell you what to trust should be checked before it is run:
 
 ```bash
-VERSION=v0.2.0 OS=linux ARCH=amd64          # or OS=darwin, ARCH=arm64
+VERSION=v0.2.1 OS=linux ARCH=amd64          # or OS=darwin, ARCH=arm64
 BASE=https://github.com/MinganieTech/mcppin/releases/download/${VERSION}
 curl -sSLO ${BASE}/mcppin_${VERSION}_${OS}_${ARCH}.tar.gz
 curl -sSLO ${BASE}/SHA256SUMS
@@ -68,7 +68,7 @@ gh attestation verify mcppin_${VERSION}_${OS}_${ARCH}.tar.gz --repo MinganieTech
 On Windows, keeping the downloaded name is what lets the checksum be checked at all:
 
 ```powershell
-$v = "v0.2.0"; $base = "https://github.com/MinganieTech/mcppin/releases/download/$v"
+$v = "v0.2.1"; $base = "https://github.com/MinganieTech/mcppin/releases/download/$v"
 Invoke-WebRequest "$base/mcppin_${v}_windows_amd64.zip" -OutFile "mcppin_${v}_windows_amd64.zip"
 Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
 (Get-FileHash "mcppin_${v}_windows_amd64.zip" -Algorithm SHA256).Hash.ToLower()
@@ -79,8 +79,8 @@ Expand-Archive "mcppin_${v}_windows_amd64.zip"
 With a Go toolchain, either binary can be installed from source:
 
 ```bash
-go install github.com/MinganieTech/mcppin/cmd/mcppin@v0.2.0
-go install github.com/MinganieTech/mcppin/cmd/mcppin-export@v0.2.0
+go install github.com/MinganieTech/mcppin/cmd/mcppin@v0.2.1
+go install github.com/MinganieTech/mcppin/cmd/mcppin-export@v0.2.1
 ```
 
 Or from a clone: `go build ./...`.
@@ -106,7 +106,7 @@ jobs:
 
       - name: install mcppin, and check what was downloaded
         run: |
-          VERSION=v0.2.0
+          VERSION=v0.2.1
           BASE=https://github.com/MinganieTech/mcppin/releases/download/${VERSION}
           curl -sSLO ${BASE}/mcppin_${VERSION}_linux_amd64.tar.gz
           curl -sSLO ${BASE}/SHA256SUMS
@@ -313,7 +313,7 @@ that produced it:
   "protocol_version": "2025-11-25",
   "complete": true,
   "captured_at": "2026-08-01T09:12:00Z",
-  "captured_by": "mcppin-export/0.2.0",
+  "captured_by": "mcppin-export/0.2.1",
   "servers": [
     {
       "id": "billing",

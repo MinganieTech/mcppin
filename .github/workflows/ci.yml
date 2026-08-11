@@ -46,6 +46,22 @@ jobs:
       - run: go test ./...
       - run: go build ./...
 
+      # Install instructions that name a version are instructions that go
+      # stale, and a README telling somebody to download a release that is no
+      # longer the current one is worse than one that says nothing. Checked on
+      # every push rather than remembered at release time.
+      - name: the README names this version and no other
+        shell: bash
+        run: |
+          version=$(sed -n 's/.*Version = "\(.*\)".*/\1/p' internal/mcppin/cli.go)
+          echo "the source says ${version}"
+          stale=$(grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+|mcppin-export/[0-9]+\.[0-9]+\.[0-9]+|Status: [0-9]+\.[0-9]+\.[0-9]+' README.md \
+                    | grep -vE "v${version}\$|mcppin-export/${version}\$|Status: ${version}\$" || true)
+          if [ -n "${stale}" ]; then
+            echo "::error::README.md still names: $(echo "${stale}" | sort -u | tr '\n' ' ')"
+            exit 1
+          fi
+
   # The exporter reads a server's pipes while forwarding its standard error, so
   # there is concurrency to get wrong. -race needs a C toolchain, which is why
   # it is one job rather than a column in the matrix above.
