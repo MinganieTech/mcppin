@@ -129,6 +129,24 @@ before this.
   draft.
 - One dependency: `golang.org/x/text`, for Unicode normalisation.
 
+### Found by the first CI run, and shipped in the same release
+
+These entries were written after the rest of this section, because the matrix found them on its
+first run and no development machine could have.
+
+- **The `go` directive is a floor of 1.25.3**, not 1.25.0. Below it, three standard library
+  advisories are reachable from the code that reads a key: quadratic parsing in `encoding/pem`
+  (GO-2025-4009) and in `crypto/x509` name constraints (GO-2025-4007), and memory exhaustion in
+  `encoding/asn1` (GO-2025-4011). The PEM handed to `-pubkey` is attacker-supplied input in a tool
+  whose job is to be handed hostile files. A machine whose toolchain was already past the floor saw
+  nothing; the runner, obeying the directive, did.
+- **`.gitattributes` fixes line endings at LF** on every platform. A checkout on Windows converts
+  to CRLF by default, and `gofmt -l .` then rejects every file in the repository.
+- Actions pinned to the current majors. The previous pins were two majors behind and ran on a
+  deprecated Node.
+- `workflow_dispatch` on CI, so the matrix can be run against a branch without opening a pull
+  request to find out whether it passes on the two platforms a development machine is not.
+
 ## 0.1.0
 
 Never released. Pinned a tool surface with a hand-written RFC 8785 canonicaliser, reported hidden

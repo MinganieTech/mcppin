@@ -34,6 +34,19 @@ jobs:
             exit 1
           fi
 
+      # A release with nothing written about it is a release nobody can decide
+      # whether to take. The section is also what the release notes are made
+      # of, so this is not a formality that can be satisfied and ignored.
+      - name: the changelog has to have a section for it
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="## ${version}" '$0 == v {f=1; next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## ${version}' section, or it is empty"
+            exit 1
+          fi
+          cat notes.md
+
       # A release comes from a commit that passed everything, not from one that
       # merely compiles here. The tests below are a second opinion; this step
       # is the one that refuses to publish a commit whose fuzzing, race
@@ -101,7 +114,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          {
+            cat notes.md
+            echo
+            echo "---"
+            echo
+            echo "Verify what you downloaded:"
+            echo '```'
+            echo "sha256sum --ignore-missing -c SHA256SUMS"
+            echo "gh attestation verify <file> --repo ${GITHUB_REPOSITORY}"
+            echo '```'
+            echo
+            echo "What a matching lockfile does **not** prove is in" \
+                 "[the threat model](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/docs/threat-model.md)."
+          } > release-notes.md
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
-            --notes "See the README and the threat model for what a matching lockfile does and does not prove." \
+            --notes-file release-notes.md \
             dist/*
