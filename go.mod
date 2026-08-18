@@ -8,4 +8,4 @@ module github.com/MinganieTech/mcppin
 // tool whose job is to be handed hostile files.
 go 1.25.3
 
-require golang.org/x/text v0.40.0
+require golang.org/x/text v0.41.0
