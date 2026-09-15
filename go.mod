@@ -6,6 +6,6 @@ module github.com/MinganieTech/mcppin
 // memory exhaustion in encoding/asn1 - all of them reachable from the PEM a
 // -pubkey flag hands to LoadPublicKey, which is attacker-supplied input in a
 // tool whose job is to be handed hostile files.
-go 1.25.3
+go 1.26.0
 
-require golang.org/x/text v0.40.0
+require golang.org/x/text v0.42.0
